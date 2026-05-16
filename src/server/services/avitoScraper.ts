@@ -1,4 +1,3 @@
-import { gotScraping } from 'got-scraping';
 import * as cheerio from 'cheerio';
 import UserAgent from 'user-agents';
 import dotenv from 'dotenv';
@@ -35,6 +34,7 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
   }
 
   try {
+    const { gotScraping } = await import('got-scraping');
     const response = await gotScraping({
       url,
       proxyUrl: process.env.PROXY_URL || undefined,
