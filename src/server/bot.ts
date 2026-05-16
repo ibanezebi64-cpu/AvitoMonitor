@@ -122,10 +122,14 @@ vk.updates.on('message_new', async (context, next) => {
     
     kb.textButton({ label: '🔗 Добавить по ссылке (Рекомендуется!)', payload: { command: 'add_by_url' }, color: Keyboard.POSITIVE_COLOR }).row();
 
-    AVITO_CATEGORIES.forEach(cat => {
-      kb.textButton({ label: cat.title.substring(0, 40), payload: { command: 'select_cat', id: cat.id }, color: Keyboard.SECONDARY_COLOR }).row();
-    });
-    kb.textButton({ label: '« Назад в меню', payload: { command: 'main' }, color: Keyboard.PRIMARY_COLOR }).inline(true);
+    for (let i = 0; i < AVITO_CATEGORIES.length; i += 2) {
+      kb.textButton({ label: AVITO_CATEGORIES[i].title.substring(0, 40), payload: { command: 'select_cat', id: AVITO_CATEGORIES[i].id }, color: Keyboard.SECONDARY_COLOR });
+      if (i + 1 < AVITO_CATEGORIES.length) {
+        kb.textButton({ label: AVITO_CATEGORIES[i + 1].title.substring(0, 40), payload: { command: 'select_cat', id: AVITO_CATEGORIES[i + 1].id }, color: Keyboard.SECONDARY_COLOR });
+      }
+      kb.row();
+    }
+    kb.textButton({ label: '« Назад в меню', payload: { command: 'main' }, color: Keyboard.PRIMARY_COLOR }).inline(false);
 
     await context.send({
       message: 'Вы можете добавить категорию по ссылке (максимально точные настройки с сайта Авито) или выбрать из базовых:',
@@ -153,12 +157,17 @@ vk.updates.on('message_new', async (context, next) => {
     kb.textButton({ label: `✅ Отслеживать всю категорию "${catData.category.title}"`, payload: { command: 'confirm_cat', id: catData.category.id }, color: Keyboard.POSITIVE_COLOR }).row();
     
     if (catData.category.subcategories && catData.category.subcategories.length > 0) {
-      catData.category.subcategories.forEach(sub => {
-        kb.textButton({ label: sub.title.substring(0, 40), payload: { command: 'confirm_cat', id: sub.id }, color: Keyboard.SECONDARY_COLOR }).row();
-      });
+      const subs = catData.category.subcategories;
+      for (let i = 0; i < subs.length; i += 2) {
+        kb.textButton({ label: subs[i].title.substring(0, 40), payload: { command: 'confirm_cat', id: subs[i].id }, color: Keyboard.SECONDARY_COLOR });
+        if (i + 1 < subs.length) {
+          kb.textButton({ label: subs[i + 1].title.substring(0, 40), payload: { command: 'confirm_cat', id: subs[i + 1].id }, color: Keyboard.SECONDARY_COLOR });
+        }
+        kb.row();
+      }
     }
 
-    kb.textButton({ label: '« Назад к категориям', payload: { command: 'add_categories' }, color: Keyboard.PRIMARY_COLOR }).inline(true);
+    kb.textButton({ label: '« Назад к категориям', payload: { command: 'add_categories' }, color: Keyboard.PRIMARY_COLOR }).inline(false);
 
     await context.send({
       message: `Категория: ${catData.category.title}\\nВыберите подкатегорию или отслеживайте всю категорию целиком:`,
@@ -244,11 +253,15 @@ vk.updates.on('message_new', async (context, next) => {
     }
 
     const kb = Keyboard.builder();
-    categories.forEach(c => {
-      kb.textButton({ label: c.title.substring(0, 40), payload: { command: 'view_my_cat', id: c.id }, color: Keyboard.SECONDARY_COLOR }).row();
-    });
+    for (let i = 0; i < categories.length; i += 2) {
+      kb.textButton({ label: categories[i].title.substring(0, 40), payload: { command: 'view_my_cat', id: categories[i].id }, color: Keyboard.SECONDARY_COLOR });
+      if (i + 1 < categories.length) {
+        kb.textButton({ label: categories[i + 1].title.substring(0, 40), payload: { command: 'view_my_cat', id: categories[i + 1].id }, color: Keyboard.SECONDARY_COLOR });
+      }
+      kb.row();
+    }
     kb.textButton({ label: '❌ Удалить все категории', payload: { command: 'remove_all_cat' }, color: Keyboard.NEGATIVE_COLOR }).row();
-    kb.textButton({ label: '« Назад в меню', payload: { command: 'main' }, color: Keyboard.PRIMARY_COLOR }).inline(true);
+    kb.textButton({ label: '« Назад в меню', payload: { command: 'main' }, color: Keyboard.PRIMARY_COLOR }).inline(false);
 
     await context.send({
       message: 'Ваши отслеживаемые категории. Выберите категорию для настройки фильтров или удаления:',
