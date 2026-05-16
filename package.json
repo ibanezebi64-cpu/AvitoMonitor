@@ -22,6 +22,7 @@
     "cheerio": "^1.2.0",
     "dotenv": "^17.4.2",
     "express": "^4.21.2",
+    "got-scraping": "^4.2.1",
     "https-proxy-agent": "^9.0.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",

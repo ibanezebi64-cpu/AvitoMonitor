@@ -1,7 +1,6 @@
-import axios from 'axios';
+import { gotScraping } from 'got-scraping';
 import * as cheerio from 'cheerio';
 import UserAgent from 'user-agents';
-import { HttpsProxyAgent } from 'https-proxy-agent';
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -35,39 +34,20 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
     url = `${BASE_URL}/rossiya?q=${encodeURIComponent(searchQuery)}`;
   }
 
-  // Use a modern desktop or mobile user agent
-  const userAgent = new UserAgent({ deviceCategory: Math.random() > 0.5 ? 'mobile' : 'desktop' });
-  const isMobile = userAgent.data.deviceCategory === 'mobile';
-
-  const headers: Record<string, string> = {
-    'User-Agent': userAgent.toString(),
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'ru-RU,ru;q=0.8,en-US;q=0.5,en;q=0.3',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'none',
-    'Sec-Fetch-User': '?1',
-    'Cache-Control': 'max-age=0',
-    'Sec-Ch-Ua-Mobile': isMobile ? '?1' : '?0',
-    'Sec-Ch-Ua-Platform': `"${userAgent.data.platform || (isMobile ? 'Android' : 'Windows')}"`
-  };
-
-  const axiosConfig: any = {
-    headers,
-    timeout: 15000
-  };
-
-  if (process.env.PROXY_URL) {
-    axiosConfig.httpsAgent = new HttpsProxyAgent(process.env.PROXY_URL);
-    axiosConfig.proxy = false; // Disable axios default proxy handling
-  }
-
   try {
-    const response = await axios.get(url, axiosConfig);
+    const response = await gotScraping({
+      url,
+      proxyUrl: process.env.PROXY_URL || undefined,
+      headerGeneratorOptions: {
+        browsers: [{ name: 'chrome', minVersion: 110 }],
+        devices: ['desktop', 'mobile'],
+        locales: ['ru-RU'],
+        operatingSystems: ['windows', 'linux', 'android']
+      },
+      timeout: { request: 20000 }
+    });
 
-    const html = response.data;
+    const html = response.body;
     const $ = cheerio.load(html);
 
     const ads: ScrapedAd[] = [];
@@ -109,8 +89,8 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
 
     return ads;
   } catch (error: any) {
-    if (error.response && [403, 429].includes(error.response.status)) {
-      console.error(`Avito Blocked us (${error.response.status}) on ${url}`);
+    if (error.response && [403, 429].includes(error.response.statusCode)) {
+      console.error(`Avito Blocked us (${error.response.statusCode}) on ${url}`);
       throw new Error('BLOCKED');
     }
     console.error(`Error fetching Avito for category ${categoryCode}:`, error.message);
