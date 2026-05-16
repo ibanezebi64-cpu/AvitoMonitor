@@ -1,0 +1,6 @@
+{
+  "name": "Avito VK Monitor Bot",
+  "description": "A VKontakte bot for monitoring Avito classifieds based on user categories and filters, with background scraping and notifications.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
