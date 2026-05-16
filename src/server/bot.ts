@@ -23,16 +23,24 @@ const MAIN_MENU_DEFAULT_KEYBOARD = Keyboard.builder()
   .textButton({ label: 'Главное меню', payload: { command: 'main' }, color: Keyboard.PRIMARY_COLOR })
   .inline(false);
 
-function getInlineMainMenu(isActive: boolean) {
-  return Keyboard.builder()
+function getInlineMainMenu(isActive: boolean, senderId?: number) {
+  const adminIdStr = process.env.ADMIN_VK_ID;
+  const isAdmin = adminIdStr && senderId === parseInt(adminIdStr, 10);
+
+  const kb = Keyboard.builder()
     .textButton({ label: 'Мои категории', payload: { command: 'my_categories' }, color: Keyboard.SECONDARY_COLOR })
     .row()
     .textButton({ label: 'Добавить категории', payload: { command: 'add_categories' }, color: Keyboard.POSITIVE_COLOR })
     .row()
     .textButton({ label: isActive ? 'Остановить отслеживание' : 'Запустить отслеживание', payload: { command: 'toggle_tracking' }, color: isActive ? Keyboard.NEGATIVE_COLOR : Keyboard.PRIMARY_COLOR })
     .row()
-    .textButton({ label: 'Помощь', payload: { command: 'help' }, color: Keyboard.SECONDARY_COLOR })
-    .inline(true);
+    .textButton({ label: 'Помощь', payload: { command: 'help' }, color: Keyboard.SECONDARY_COLOR });
+    
+  if (isAdmin) {
+    kb.row().textButton({ label: '👑 Админ', payload: { command: 'admin_panel' }, color: Keyboard.PRIMARY_COLOR });
+  }
+
+  return kb.inline(true);
 }
 
 // Bot middleware for user init
@@ -76,7 +84,7 @@ vk.updates.on('message_new', async (context, next) => {
     
     await context.send({
       message: 'Главное меню:',
-      keyboard: getInlineMainMenu(user.is_active)
+      keyboard: getInlineMainMenu(user.is_active, context.senderId)
     });
     return;
   }
@@ -102,7 +110,7 @@ vk.updates.on('message_new', async (context, next) => {
     
     await context.send({
       message: statusText,
-      keyboard: getInlineMainMenu(isActive)
+      keyboard: getInlineMainMenu(isActive, context.senderId)
     });
     return;
   }
@@ -192,7 +200,7 @@ vk.updates.on('message_new', async (context, next) => {
 
     await context.send({
       message: 'Главное меню:',
-      keyboard: getInlineMainMenu(user.is_active)
+      keyboard: getInlineMainMenu(user.is_active, context.senderId)
     });
     return;
   }
@@ -248,7 +256,7 @@ vk.updates.on('message_new', async (context, next) => {
     if (categories.length === 0) {
       await context.send({
         message: 'У вас пока нет добавленных категорий.',
-        keyboard: getInlineMainMenu(user.is_active)
+        keyboard: getInlineMainMenu(user.is_active, context.senderId)
       });
       return;
     }
@@ -276,7 +284,7 @@ vk.updates.on('message_new', async (context, next) => {
     if (user.is_active) toggleUserTracking(user.vk_id); // Stop tracking if no categories
     await context.send({
       message: '✅ Все категории удалены. Отслеживание остановлено.',
-      keyboard: getInlineMainMenu(false)
+      keyboard: getInlineMainMenu(false, context.senderId)
     });
     return;
   }
@@ -296,7 +304,7 @@ vk.updates.on('message_new', async (context, next) => {
     // Call my_categories logic manually (trigger next event visually)
     await context.send({
       message: 'Главное меню:',
-      keyboard: getInlineMainMenu(user.is_active && categories.length > 0)
+      keyboard: getInlineMainMenu(user.is_active && categories.length > 0, context.senderId)
     });
     return;
   }
@@ -348,7 +356,7 @@ vk.updates.on('message_new', async (context, next) => {
          updateUserState(user.vk_id, 'main_menu');
          await context.send({
            message: '✅ Поиск по ссылке успешно добавлен! Бот будет учитывать все выбранные в ней фильтры на Авито.',
-           keyboard: getInlineMainMenu(user.is_active)
+           keyboard: getInlineMainMenu(user.is_active, context.senderId)
          });
          return;
       }
