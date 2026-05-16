@@ -154,7 +154,8 @@ vk.updates.on('message_new', async (context, next) => {
     if (!catData) return;
 
     const kb = Keyboard.builder();
-    kb.textButton({ label: `✅ Отслеживать всю категорию "${catData.category.title}"`, payload: { command: 'confirm_cat', id: catData.category.id }, color: Keyboard.POSITIVE_COLOR }).row();
+    const labelText = `✅ Категория целиком: ${catData.category.title}`;
+    kb.textButton({ label: labelText.substring(0, 40), payload: { command: 'confirm_cat', id: catData.category.id }, color: Keyboard.POSITIVE_COLOR }).row();
     
     if (catData.category.subcategories && catData.category.subcategories.length > 0) {
       const subs = catData.category.subcategories;
