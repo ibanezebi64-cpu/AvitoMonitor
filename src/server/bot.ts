@@ -410,12 +410,47 @@ vk.updates.on('message_new', async (context, next) => {
   if (text === '/admin' || text === 'админ' || payload?.command === 'admin_panel') {
     const kb = Keyboard.builder()
       .textButton({ label: '📊 Статистика', payload: { command: 'admin_stats' }, color: Keyboard.PRIMARY_COLOR }).row()
+      .textButton({ label: '🌐 Проверить прокси', payload: { command: 'admin_test_proxy' }, color: Keyboard.PRIMARY_COLOR }).row()
       .textButton({ label: '« К боту', payload: { command: 'main' }, color: Keyboard.SECONDARY_COLOR }).inline(true);
 
     await context.send({
       message: '👑 Панель администратора:',
       keyboard: kb
     });
+    return;
+  }
+
+  if (payload?.command === 'admin_test_proxy') {
+    const kb = Keyboard.builder()
+      .textButton({ label: '« Назад', payload: { command: 'admin_panel' }, color: Keyboard.SECONDARY_COLOR }).inline(true);
+
+    try {
+      const axios = require('axios');
+      const { HttpsProxyAgent } = require('https-proxy-agent');
+      const axiosConfig: any = { timeout: 10000 };
+      let msg = '';
+
+      if (process.env.PROXY_URL) {
+        axiosConfig.httpsAgent = new HttpsProxyAgent(process.env.PROXY_URL);
+        axiosConfig.proxy = false;
+        msg += 'Прокси настроен. ';
+      } else {
+        msg += '⚠️ PROXY_URL не найден в .env. ';
+      }
+
+      const res = await axios.get('https://api.ipify.org?format=json', axiosConfig);
+      msg += `\\nВаш текущий IP (через запрос): ${res.data.ip}`;
+
+      await context.send({
+        message: msg,
+        keyboard: kb
+      });
+    } catch (e: any) {
+      await context.send({
+        message: `❌ Ошибка проверки прокси: ${e.message}`,
+        keyboard: kb
+      });
+    }
     return;
   }
 
