@@ -112,25 +112,36 @@ export async function runSchedulerLoop() {
             wasBlocked = false;
 
             if (ads.length > 0) {
-               // Filter ads logically
-               const filteredAds = ads.filter(ad => {
-                  // Extricate price number
-                  const parsedPrice = parseInt(ad.price.replace(/\\D/g, ''), 10);
-                  // Only apply these filters if it's NOT a custom URL 
-                  // Custom URLs usually have their own pre-applied filters on Avito side
-                  if (!isNaN(parsedPrice) && filters && !filters.url) {
-                    if (filters.min_price && parsedPrice < filters.min_price) return false;
-                    if (filters.max_price && parsedPrice > filters.max_price) return false;
-                  }
-                  return true;
-               });
-
-               for (const ad of filteredAds) {
-                 if (!hasSeenAd(task.user_id, ad.avito_id)) {
-                   await notifyUser(task.user_id, ad);
-                   markAdAsSeen(task.user_id, ad.avito_id);
+              if (!task.cat.is_initialized) {
+                 // First run: just save all ads to as seen, so they don't trigger notifications later.
+                 for (const ad of ads) {
+                   if (!hasSeenAd(task.user_id, ad.avito_id)) {
+                     markAdAsSeen(task.user_id, ad.avito_id);
+                   }
                  }
-               }
+                 db.prepare('UPDATE categories SET is_initialized = 1 WHERE id = ?').run(task.cat.id);
+                 task.cat.is_initialized = 1;
+              } else {
+                 // Filter ads logically
+                 const filteredAds = ads.filter(ad => {
+                    // Extricate price number
+                    const parsedPrice = parseInt(ad.price.replace(/\\D/g, ''), 10);
+                    // Only apply these filters if it's NOT a custom URL 
+                    // Custom URLs usually have their own pre-applied filters on Avito side
+                    if (!isNaN(parsedPrice) && filters && !filters.url) {
+                      if (filters.min_price && parsedPrice < filters.min_price) return false;
+                      if (filters.max_price && parsedPrice > filters.max_price) return false;
+                    }
+                    return true;
+                 });
+
+                 for (const ad of filteredAds) {
+                   if (!hasSeenAd(task.user_id, ad.avito_id)) {
+                     await notifyUser(task.user_id, ad);
+                     markAdAsSeen(task.user_id, ad.avito_id);
+                   }
+                 }
+              }
             }
 
             // Random delay between 15-30 seconds to not spam Avito completely instantly

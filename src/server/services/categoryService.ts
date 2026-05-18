@@ -5,6 +5,7 @@ export interface Category {
   user_id: number;
   category_code: string;
   title: string;
+  is_initialized: number;
 }
 
 export interface Filter {

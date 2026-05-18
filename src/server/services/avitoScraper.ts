@@ -33,6 +33,15 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
     url = `${BASE_URL}/rossiya?q=${encodeURIComponent(searchQuery)}`;
   }
 
+  // Force sort by date (s=104) so that we always get newest items instead of old VIP items
+  try {
+    const parsedUrl = new URL(url);
+    parsedUrl.searchParams.set('s', '104');
+    url = parsedUrl.toString();
+  } catch(e) {
+    console.error('Failed to parse URL for sorting', e);
+  }
+
   try {
     const { gotScraping } = await import('got-scraping');
     const response = await gotScraping({
@@ -71,7 +80,13 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
       const images: string[] = [];
       $(el).find('img').each((idx, imgEl) => {
         const src = $(imgEl).attr('src');
-        if (src && src.startsWith('http')) {
+        const className = $(imgEl).attr('class') || '';
+        // Skip user avatars and dummy icons
+        if (src && src.startsWith('http') && 
+            !src.includes('avatar') && 
+            !className.includes('avatar') && 
+            !className.includes('seller') && 
+            !className.includes('icon')) {
           images.push(src);
         }
       });
