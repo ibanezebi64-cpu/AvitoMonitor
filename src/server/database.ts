@@ -35,12 +35,6 @@ export function initDB() {
       FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE
     );
 
-    try {
-      db.prepare('ALTER TABLE categories ADD COLUMN is_initialized INTEGER DEFAULT 0').run();
-    } catch(e) {
-      // Column might already exist
-    }
-
     CREATE TABLE IF NOT EXISTS seen_ads (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       avito_id TEXT,
@@ -49,6 +43,12 @@ export function initDB() {
       FOREIGN KEY(user_id) REFERENCES users(vk_id) ON DELETE CASCADE
     );
   `);
+
+  try {
+    db.prepare('ALTER TABLE categories ADD COLUMN is_initialized INTEGER DEFAULT 0').run();
+  } catch(e) {
+    // Column might already exist
+  }
 
   try {
     db.exec(`ALTER TABLE filters ADD COLUMN url TEXT;`);
