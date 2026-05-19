@@ -58,7 +58,7 @@ vk.updates.on('message_new', async (context, next) => {
 
   if (text === 'помощь' || payload?.command === 'help') {
     await context.send({
-      message: `Инструкция по использованию бота:\\n1. В разделе "Добавить категории" выберите нужные товары для отслеживания.\\n2. В разделе "Мои категории" вы можете задать фильтры (цена, состояние).\\n3. Нажмите "Запустить отслеживание", чтобы бот начал мониторить Авито и присылать новые объявления.\\n\\nЧтобы вызвать меню, нажмите "Главное меню".`,
+      message: `Инструкция по использованию бота:\n1. В разделе "Добавить категории" отправьте ссылку с Авито с нужными фильтрами.\n2. Бот будет автоматически проверять эту ссылку и присылать новые объявления.\n3. Нажмите "Запустить отслеживание", чтобы бот начал работу.\n\nЧтобы вызвать меню, нажмите "Главное меню".`,
       keyboard: MAIN_MENU_DEFAULT_KEYBOARD
     });
     return;
@@ -117,8 +117,7 @@ vk.updates.on('message_new', async (context, next) => {
   await next();
 });
 
-import { AVITO_CATEGORIES, getCategoryById } from './constants/categories';
-import { addCategory, getCategoryFilters, removeCategory, updateFilter, resetFilters } from './services/categoryService';
+import { addCategory, getCategoryFilters, removeCategory } from './services/categoryService';
 
 // Add Categories Selection
 vk.updates.on('message_new', async (context, next) => {
@@ -126,21 +125,14 @@ vk.updates.on('message_new', async (context, next) => {
   const user = context.state.dbUser;
 
   if (payload?.command === 'add_categories') {
-    const kb = Keyboard.builder();
-    
-    kb.textButton({ label: '🔗 Добавить по ссылке (Рекомендуется!)', payload: { command: 'add_by_url' }, color: Keyboard.POSITIVE_COLOR }).row();
-
-    for (let i = 0; i < AVITO_CATEGORIES.length; i += 2) {
-      kb.textButton({ label: AVITO_CATEGORIES[i].title.substring(0, 40), payload: { command: 'select_cat', id: AVITO_CATEGORIES[i].id }, color: Keyboard.SECONDARY_COLOR });
-      if (i + 1 < AVITO_CATEGORIES.length) {
-        kb.textButton({ label: AVITO_CATEGORIES[i + 1].title.substring(0, 40), payload: { command: 'select_cat', id: AVITO_CATEGORIES[i + 1].id }, color: Keyboard.SECONDARY_COLOR });
-      }
-      kb.row();
-    }
-    kb.textButton({ label: '« Назад в меню', payload: { command: 'main' }, color: Keyboard.PRIMARY_COLOR }).inline(false);
+    const kb = Keyboard.builder()
+      .textButton({ label: '🔗 Добавить по ссылке (Рекомендуется!)', payload: { command: 'add_by_url' }, color: Keyboard.POSITIVE_COLOR })
+      .row()
+      .textButton({ label: '« Назад в меню', payload: { command: 'main' }, color: Keyboard.PRIMARY_COLOR })
+      .inline(false);
 
     await context.send({
-      message: 'Вы можете добавить категорию по ссылке (максимально точные настройки с сайта Авито) или выбрать из базовых:',
+      message: 'Для отслеживания новых объявлений просто отправьте мне ссылку с сайта Авито с уже настроенными вами фильтрами.',
       keyboard: kb
     });
     return;
@@ -151,56 +143,8 @@ vk.updates.on('message_new', async (context, next) => {
     const kb = Keyboard.builder().textButton({ label: 'Отмена', payload: { command: 'main' }, color: Keyboard.NEGATIVE_COLOR }).inline(true);
 
     await context.send({
-      message: '🔗 Инструкция:\\n1. Зайдите на сайт Авито (avito.ru) или в приложение.\\n2. Введите нужный поисковой запрос, выберите любую категорию, любые точечные фильтры (размер, пробег, диагональ, марку).\\n3. Скопируйте ссылку из адресной строки и отправьте её сюда.',
+      message: '🔗 Инструкция:\n1. Зайдите на сайт Авито (avito.ru) или в приложение.\n2. Введите нужный поисковой запрос, выберите любую категорию, любые точечные фильтры (размер, пробег, диагональ, марку).\n3. Скопируйте ссылку из адресной строки и отправьте её сюда.',
       keyboard: kb
-    });
-    return;
-  }
-
-  if (payload?.command === 'select_cat') {
-    const catData = getCategoryById(payload.id);
-    if (!catData) return;
-
-    const kb = Keyboard.builder();
-    const labelText = `✅ Категория целиком: ${catData.category.title}`;
-    kb.textButton({ label: labelText.substring(0, 40), payload: { command: 'confirm_cat', id: catData.category.id }, color: Keyboard.POSITIVE_COLOR }).row();
-    
-    if (catData.category.subcategories && catData.category.subcategories.length > 0) {
-      const subs = catData.category.subcategories;
-      for (let i = 0; i < subs.length; i += 2) {
-        kb.textButton({ label: subs[i].title.substring(0, 40), payload: { command: 'confirm_cat', id: subs[i].id }, color: Keyboard.SECONDARY_COLOR });
-        if (i + 1 < subs.length) {
-          kb.textButton({ label: subs[i + 1].title.substring(0, 40), payload: { command: 'confirm_cat', id: subs[i + 1].id }, color: Keyboard.SECONDARY_COLOR });
-        }
-        kb.row();
-      }
-    }
-
-    kb.textButton({ label: '« Назад к категориям', payload: { command: 'add_categories' }, color: Keyboard.PRIMARY_COLOR }).inline(false);
-
-    await context.send({
-      message: `Категория: ${catData.category.title}\\nВыберите подкатегорию или отслеживайте всю категорию целиком:`,
-      keyboard: kb
-    });
-    return;
-  }
-
-  if (payload?.command === 'confirm_cat') {
-    const catData = getCategoryById(payload.id);
-    if (!catData) return;
-
-    // Add to DB
-    const categories = getUserCategories(user.vk_id);
-    if (categories.some(c => c.category_code === payload.id)) {
-      await context.send({ message: '⚠ Эта категория уже добавлена.' });
-    } else {
-      addCategory(user.vk_id, payload.id, catData.category.title);
-      await context.send({ message: `✅ Категория "${catData.category.title}" успешно добавлена!` });
-    }
-
-    await context.send({
-      message: 'Главное меню:',
-      keyboard: getInlineMainMenu(user.is_active, context.senderId)
     });
     return;
   }
@@ -217,32 +161,15 @@ async function sendCategorySettings(context: any, user: any, catId: number) {
   const filters = getCategoryFilters(catId);
   if (!filters) return;
 
-  const priceText = filters.min_price || filters.max_price 
-    ? `[${filters.min_price || 0} - ${filters.max_price || '∞'} ₽]` 
-    : '[Любая]';
-  
-  const condTextMap: Record<string, string> = { 'all': 'Все', 'new': 'Новые', 'used': 'Б/У' };
-  const condText = condTextMap[filters.condition] || 'Все';
-
   const kb = Keyboard.builder();
   
-  if (filters.url) {
-    kb.textButton({ label: '❌ Удалить категорию (По ссылке)', payload: { command: 'remove_cat', id: catId }, color: Keyboard.NEGATIVE_COLOR }).row();
-  } else {
-    kb.textButton({ label: `Цена ${priceText}`, payload: { command: 'set_price_filter', id: catId }, color: Keyboard.SECONDARY_COLOR }).row()
-      .textButton({ label: `Состояние: ${condText}`, payload: { command: 'toggle_cond_filter', id: catId }, color: Keyboard.SECONDARY_COLOR }).row()
-      .textButton({ label: 'Сбросить фильтры', payload: { command: 'reset_filters', id: catId }, color: Keyboard.PRIMARY_COLOR }).row()
-      .textButton({ label: '❌ Удалить категорию', payload: { command: 'remove_cat', id: catId }, color: Keyboard.NEGATIVE_COLOR }).row();
-  }
-
+  kb.textButton({ label: '❌ Удалить категорию', payload: { command: 'remove_cat', id: catId }, color: Keyboard.NEGATIVE_COLOR }).row();
   kb.textButton({ label: '« К списку категорий', payload: { command: 'my_categories' }, color: Keyboard.PRIMARY_COLOR }).inline(true);
 
   updateUserState(user.vk_id, 'main_menu'); // assure clean state
 
   await context.send({
-    message: filters.url 
-      ? `Настройки для: ${catInfo.title}\\n\\n🔗 Ваша ссылка (все фильтры применены внутри ссылки):\\n${filters.url}` 
-      : `Настройки для: ${catInfo.title}`,
+    message: `Настройки для: ${catInfo.title}\n\n🔗 Ваша ссылка (все фильтры применены внутри ссылки):\n${filters.url || 'Не указана'}`,
     keyboard: kb
   });
 }
@@ -309,35 +236,6 @@ vk.updates.on('message_new', async (context, next) => {
     return;
   }
 
-  // Filters setup
-  if (payload?.command === 'toggle_cond_filter') {
-    const filters = getCategoryFilters(payload.id);
-    if (!filters) return;
-    const cycleMap: Record<string, string> = { 'all': 'new', 'new': 'used', 'used': 'all' };
-    updateFilter(payload.id, { condition: cycleMap[filters.condition] });
-    
-    await sendCategorySettings(context, user, payload.id);
-    return;
-  }
-
-  if (payload?.command === 'reset_filters') {
-    resetFilters(payload.id);
-    await sendCategorySettings(context, user, payload.id);
-    return;
-  }
-
-  if (payload?.command === 'set_price_filter') {
-    updateUserState(user.vk_id, `await_price_${payload.id}`);
-    
-    const kb = Keyboard.builder().textButton({ label: 'Отмена', payload: { command: 'view_my_cat', id: payload.id }, color: Keyboard.NEGATIVE_COLOR }).inline(true);
-
-    await context.send({
-      message: 'Введите минимальную и максимальную цену через пробел или дефис (например: "1000 5000").\\nВведите "0 5000" (до 5000) или "1000 0" (от 1000).',
-      keyboard: kb
-    });
-    return;
-  }
-
   await next();
 });
 
@@ -366,30 +264,6 @@ vk.updates.on('message_new', async (context, next) => {
       message: '❌ Ссылка не распознана. Убедитесь, что она начинается с https://m.avito.ru или https://www.avito.ru',
       keyboard: Keyboard.builder().textButton({ label: 'Отмена', payload: { command: 'main' }, color: Keyboard.NEGATIVE_COLOR }).inline(true)
     });
-    return;
-  }
-
-  if (user.state.startsWith('await_price_')) {
-    const catId = parseInt(user.state.replace('await_price_', ''), 10);
-    
-    // Attempt parse prices
-    const numbers = text.match(/\\d+/g);
-    if (numbers && numbers.length >= 1) {
-      const min = parseInt(numbers[0], 10);
-      const max = numbers.length > 1 ? parseInt(numbers[1], 10) : 0;
-      
-      updateFilter(catId, { 
-        min_price: min > 0 ? min : null, 
-        max_price: max > 0 ? max : null 
-      });
-      
-      await context.send({ message: '✅ Ценовой фильтр установлен.' });
-    } else {
-      await context.send({ message: '❌ Неверный формат цены. Фильтр сброшен.' });
-    }
-
-    updateUserState(user.vk_id, 'main_menu');
-    await sendCategorySettings(context, user, catId);
     return;
   }
 

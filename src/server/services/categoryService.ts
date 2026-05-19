@@ -55,32 +55,3 @@ export function getCategoryFilters(categoryId: number): Filter | undefined {
   const stmt = db.prepare('SELECT * FROM filters WHERE category_id = ?');
   return stmt.get(categoryId) as Filter | undefined;
 }
-
-export function updateFilter(categoryId: number, filterObj: Partial<Filter>) {
-  const existing = getCategoryFilters(categoryId);
-  if (!existing) return;
-  
-  const updated = { ...existing, ...filterObj };
-  
-  const stmt = db.prepare(`
-    UPDATE filters 
-    SET min_price = ?, max_price = ?, condition = ?, search_query = ?
-    WHERE category_id = ?
-  `);
-  stmt.run(
-    updated.min_price, 
-    updated.max_price, 
-    updated.condition, 
-    updated.search_query, 
-    categoryId
-  );
-}
-
-export function resetFilters(categoryId: number) {
-  const stmt = db.prepare(`
-    UPDATE filters 
-    SET min_price = NULL, max_price = NULL, condition = 'all', search_query = NULL
-    WHERE category_id = ?
-  `);
-  stmt.run(categoryId);
-}

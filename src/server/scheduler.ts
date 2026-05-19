@@ -1,7 +1,7 @@
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { VK, Keyboard } from 'vk-io';
 import axios from 'axios';
-import { getAllActiveUsers } from './services/userService';
+import { getUser, getAllActiveUsers } from './services/userService';
 import { getUserCategories, getCategoryFilters, Category } from './services/categoryService';
 import { fetchCategoryAds, ScrapedAd, advanceProxy, getCurrentProxy } from './services/avitoScraper';
 import { db } from './database';
@@ -116,6 +116,19 @@ export async function runSchedulerLoop() {
 
         for (const task of allTasks) {
           try {
+            // Check if user is still active and category still exists before running task
+            const currentUser = getUser(task.user_id);
+            if (!currentUser || !currentUser.is_active) {
+                console.log(`[Скрейпер] Пользователь ${task.user_id} теперь неактивен. Пропускаю задачу.`);
+                continue;
+            }
+
+            const currentCat = db.prepare('SELECT * FROM categories WHERE id = ?').get(task.cat.id);
+            if (!currentCat) {
+                console.log(`[Скрейпер] Категория ${task.cat.id} была удалена. Пропускаю задачу.`);
+                continue;
+            }
+
             console.log(`[Скрейпер] Запуск парсинга. Пользователь: ${task.user_id}, Категория: "${task.cat.title}"`);
             const filters = getCategoryFilters(task.cat.id);
             let page = 1;
@@ -179,17 +192,14 @@ export async function runSchedulerLoop() {
               } else {
                  let foundSeenAd = false;
                  
-                 // Filter ads logically
-                 const filteredAds = ads.filter(ad => {
-                    const parsedPrice = parseInt(ad.price.replace(/\D/g, ''), 10);
-                    if (!isNaN(parsedPrice) && filters && !filters.url) {
-                      if (filters.min_price && parsedPrice < filters.min_price) return false;
-                      if (filters.max_price && parsedPrice > filters.max_price) return false;
-                    }
-                    return true;
-                 });
-
                  for (const ad of ads) {
+                   // Re-check if category still exists before marking seen (avoid FK error)
+                   const checkCat = db.prepare('SELECT id FROM categories WHERE id = ?').get(task.cat.id);
+                   if (!checkCat) {
+                     console.log(`[Скрейпер] Категория ${task.cat.id} была удалена в процессе. Отмена.`);
+                     break;
+                   }
+
                    if (hasSeenAd(task.user_id, task.cat.id, ad.avito_id)) {
                      foundSeenAd = true;
                    } else {
@@ -197,12 +207,11 @@ export async function runSchedulerLoop() {
                      // Add to DB
                      markAdAsSeen(task.user_id, task.cat.id, ad.avito_id);
                      
-                     // Send to user only if it matches filters
-                     if (filteredAds.some(fAd => fAd.avito_id === ad.avito_id)) {
-                       console.log(`[Скрейпер] Отправляем объявление ${ad.avito_id} в VK.`);
-                       await notifyUser(task.user_id, ad, getCurrentProxy());
-                     } else {
-                       console.log(`[Скрейпер] Объявление ${ad.avito_id} отсеяно фильтром (цена/и т.д.). Игнорируем.`);
+                     // Final check before notify: is user still active?
+                     const checkUser = getUser(task.user_id);
+                     if (checkUser && checkUser.is_active) {
+                        console.log(`[Скрейпер] Отправляем объявление ${ad.avito_id} в VK.`);
+                        await notifyUser(task.user_id, ad, getCurrentProxy());
                      }
                    }
                  }
