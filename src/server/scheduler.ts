@@ -182,6 +182,18 @@ export async function runSchedulerLoop() {
             let referer = 'https://www.avito.ru/';
 
             while (true) {
+              // Check if user is still active and category still exists inside the loop to allow stopping
+              const currentUserLoop = getUser(task.user_id);
+              if (!currentUserLoop || !currentUserLoop.is_active) {
+                  console.log(`[Скрейпер] Пользователь ${task.user_id} стал неактивен во время парсинга. Останавливаю.`);
+                  break;
+              }
+              const currentCatLoop = db.prepare('SELECT id FROM categories WHERE id = ?').get(task.cat.id);
+              if (!currentCatLoop) {
+                  console.log(`[Скрейпер] Категория ${task.cat.id} была удалена во время парсинга. Останавливаю.`);
+                  break;
+              }
+
               console.log(`[Скрейпер] -> Читаю страницу ${page} для категории: ${task.cat.title}... (initializationMode: ${initializationMode})`);
               let ads: ScrapedAd[] = [];
               try {
@@ -280,14 +292,20 @@ export async function runSchedulerLoop() {
             } // end while(true)
             
             if (initializationMode) {
-               console.log(`[Скрейпер] Инициализация категории "${task.cat.title}" пользователя ${task.user_id} завершена. База наполнена.`);
-               db.prepare('UPDATE categories SET is_initialized = 1 WHERE id = ?').run(task.cat.id);
-               task.cat.is_initialized = 1;
-               vk.api.messages.send({
-                 user_id: task.user_id,
-                 random_id: Math.floor(Math.random() * 1000000000),
-                 message: `✅ Категория "${task.cat.title}" к работе готова! Исходная база объявлений собрана.`
-               }).catch(e => console.error(e));
+               // Only complete initialization if user is still active
+               const checkActiveAtEnd = getUser(task.user_id);
+               if (checkActiveAtEnd && checkActiveAtEnd.is_active) {
+                 console.log(`[Скрейпер] Инициализация категории "${task.cat.title}" пользователя ${task.user_id} завершена. База наполнена.`);
+                 db.prepare('UPDATE categories SET is_initialized = 1 WHERE id = ?').run(task.cat.id);
+                 task.cat.is_initialized = 1;
+                 vk.api.messages.send({
+                   user_id: task.user_id,
+                   random_id: Math.floor(Math.random() * 1000000000),
+                   message: `✅ Категория "${task.cat.title}" к работе готова! Исходная база объявлений собрана.`
+                 }).catch(e => console.error(e));
+               } else {
+                 console.log(`[Скрейпер] Инициализация категории "${task.cat.title}" прервана (пользователь неактивен).`);
+               }
             }
 
             // Random delay between tasks
