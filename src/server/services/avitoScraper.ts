@@ -57,12 +57,15 @@ export async function testAllProxies(): Promise<string> {
         url: 'https://m.avito.ru/rossiya',
         proxyUrl: proxy,
         headerGeneratorOptions: {
-          browsers: [{ name: 'chrome', minVersion: 110 }],
-          devices: ['desktop', 'mobile'],
-          locales: ['ru-RU'],
-          operatingSystems: ['windows', 'linux', 'android']
+          browsers: [{ name: 'chrome', minVersion: 110 }, { name: 'safari', minVersion: 15 }],
+          devices: ['mobile'],
+          locales: ['ru-RU', 'ru;q=0.9'],
+          operatingSystems: ['android', 'ios']
         },
-        timeout: { request: 15000 },
+        headers: {
+          'referer': 'https://m.avito.ru/'
+        },
+        timeout: { request: 40000 },
         throwHttpErrors: false
       });
       msg += `Статус: ${getStatusDescription(response.statusCode)}\n`;
@@ -97,7 +100,7 @@ function getRandomInt(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-export async function fetchCategoryAds(categoryCode: string, searchQuery?: string | null, customUrl?: string | null, page: number = 1): Promise<ScrapedAd[]> {
+export async function fetchCategoryAds(categoryCode: string, searchQuery?: string | null, customUrl?: string | null, page: number = 1, cookieJar?: any, sessionToken?: any, referer?: string): Promise<ScrapedAd[]> {
   // Add a random human-like delay before requesting
   await delay(getRandomInt(3000, 7000));
 
@@ -127,16 +130,34 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
     const response = await gotScraping({
       url,
       proxyUrl: proxyToUse,
+      cookieJar,
+      sessionToken,
       headerGeneratorOptions: {
-        browsers: [{ name: 'chrome', minVersion: 110 }],
-        devices: ['desktop', 'mobile'],
-        locales: ['ru-RU'],
-        operatingSystems: ['windows', 'linux', 'android']
+        browsers: [{ name: 'chrome', minVersion: 110 }, { name: 'safari', minVersion: 15 }],
+        devices: ['mobile'],
+        locales: ['ru-RU', 'ru;q=0.9'],
+        operatingSystems: ['android', 'ios']
       },
-      timeout: { request: 20000 }
+      headers: {
+        'referer': referer || 'https://m.avito.ru/'
+      },
+      timeout: { request: 40000 }
     });
 
     const html = response.body;
+    
+    // Если Авито вместо объявлений отдает страницу логина (перенаправляет)
+    if (response.url && (response.url.includes('/login') || response.url.includes('auth'))) {
+      currentProxyStatus = '🛑 Редирект на страницу авторизации';
+      throw new Error('BLOCKED');
+    }
+
+    // Иногда отдает 200, но вместо контента страница блокировки (капча)
+    if (html.includes('auth-form') || html.includes('Доступ временно заблокирован') || html.includes('firewall')) {
+      currentProxyStatus = '⚠️ Страница блокировки/капчи (200 OK)';
+      throw new Error('BLOCKED');
+    }
+
     currentProxyStatus = '✅ Отлично (200)';
     const $ = cheerio.load(html);
 
@@ -182,6 +203,16 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
          });
       }
     });
+
+    if (ads.length === 0) {
+      console.log(`[Скрейпер:Avito] Внимание: Найдено 0 объявлений. Проверка структуры HTML: title=${$('title').text().trim()}`);
+      // Check if it's an end-of-catalog or empty message
+      if (html.includes('По вашему запросу ничего не найдено') || html.includes('ничего не найдено')) {
+         console.log(`[Скрейпер:Avito] Обнаружен конец выдачи (объявления закончились на этой странице).`);
+      } else if (html.length < 50000) {
+         console.log(`[Скрейпер:Avito] Подозрительно маленький размер страницы (${html.length} байт). Возможно лимит выдачи без JS.`);
+      }
+    }
 
     return ads;
   } catch (error: any) {

@@ -1,3 +1,4 @@
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import { VK, Keyboard } from 'vk-io';
 import axios from 'axios';
 import { getAllActiveUsers } from './services/userService';
@@ -5,6 +6,7 @@ import { getUserCategories, getCategoryFilters, Category } from './services/cate
 import { fetchCategoryAds, ScrapedAd, advanceProxy, getCurrentProxy } from './services/avitoScraper';
 import { db } from './database';
 import dotenv from 'dotenv';
+import { CookieJar } from 'tough-cookie';
 dotenv.config();
 
 const vk = new VK({ token: process.env.VK_TOKEN || 'DUMMY' });
@@ -42,21 +44,33 @@ async function notifyAdmin(message: string) {
 }
 
 // Function to send ad via VK with images and inline link button
-async function notifyUser(vkId: number, ad: ScrapedAd) {
+async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
   try {
     let message = `🆕 Новое объявление!\\n\\n📌 ${ad.title}\\n💰 Цена: ${ad.price}`;
     
     const attachments: string[] = [];
     
+    let httpsAgent;
+    if (proxyString) {
+      httpsAgent = new HttpsProxyAgent(proxyString);
+    }
+    
     // Download and upload up to 3 images
     for (const imgUrl of ad.images) {
       if (attachments.length >= 3) break;
       try {
-        const response = await axios.get(imgUrl, { responseType: 'arraybuffer' });
+        const response = await axios.get(imgUrl, { 
+          responseType: 'arraybuffer', 
+          timeout: 15000,
+          httpsAgent: httpsAgent,
+          proxy: false // Ensure axios doesn't try to use its own proxy logic if httpsAgent is supplied
+        });
         const photo = await vk.upload.messagePhoto({
           source: { value: response.data, filename: 'image.jpg' }
         });
         attachments.push(photo.toString());
+        // Help garbage collector
+        (response as any).data = null;
       } catch (e) {
         console.error('Error uploading photo to VK:', e);
       }
@@ -79,7 +93,7 @@ async function notifyUser(vkId: number, ad: ScrapedAd) {
 }
 
 export async function runSchedulerLoop() {
-  console.log('Scheduler loop started.');
+  console.log('[Скрейпер] Главный цикл запущен.');
   let consecutiveBlocks = 0;
   let wasBlocked = false;
 
@@ -89,7 +103,7 @@ export async function runSchedulerLoop() {
     try {
       const users = getAllActiveUsers();
       if (users.length > 0) {
-        console.log(`Checking ads for ${users.length} active users.`);
+        console.log(`[Скрейпер] Найдено: ${users.length} активных пользователей для проверки.`);
 
         // Gather all categories to avoid duplicate hits on Avito
         const allTasks: { user_id: number, cat: Category }[] = [];
@@ -97,17 +111,28 @@ export async function runSchedulerLoop() {
           const cats = getUserCategories(u.vk_id);
           cats.forEach(c => allTasks.push({ user_id: u.vk_id, cat: c }));
         }
+        
+        console.log(`[Скрейпер] Всего задач (категорий) в очереди: ${allTasks.length}`);
 
         for (const task of allTasks) {
           try {
+            console.log(`[Скрейпер] Запуск парсинга. Пользователь: ${task.user_id}, Категория: "${task.cat.title}"`);
             const filters = getCategoryFilters(task.cat.id);
             let page = 1;
             let initializationMode = !task.cat.is_initialized;
+            const cookieJar = new CookieJar();
+            const sessionToken = {}; 
+            let referer = 'https://m.avito.ru/';
 
             while (true) {
+              console.log(`[Скрейпер] -> Читаю страницу ${page} для категории: ${task.cat.title}... (initializationMode: ${initializationMode})`);
               let ads: ScrapedAd[] = [];
               try {
-                ads = await fetchCategoryAds(task.cat.category_code, filters?.search_query, filters?.url, page);
+                ads = await fetchCategoryAds(task.cat.category_code, filters?.search_query, filters?.url, page, cookieJar, sessionToken, referer);
+                // Update referer to current page URL for next request
+                referer = typeof filters?.url === 'string' && filters.url 
+                          ? filters.url + (page > 1 ? `&p=${page}` : '') 
+                          : `https://m.avito.ru/rossiya/${task.cat.category_code}?p=${page}`;
                 
                 // If fetch executes successfully without throw, reset block counter
                 if (wasBlocked && consecutiveBlocks > 0) {
@@ -134,9 +159,10 @@ export async function runSchedulerLoop() {
                 }
               }
 
-              console.log(`Fetched ${ads.length} ads from page ${page} (initializationMode: ${initializationMode})`);
+              console.log(`[Скрейпер] Успешно получено: ${ads.length} объявлений. Категория: ${task.cat.title}, Страница: ${page}`);
 
               if (ads.length === 0) {
+                 console.log(`[Скрейпер] На странице ${page} нет объявлений. Прекращаю обход категории ${task.cat.title}.`);
                  break;
               }
 
@@ -167,27 +193,41 @@ export async function runSchedulerLoop() {
                    if (hasSeenAd(task.user_id, task.cat.id, ad.avito_id)) {
                      foundSeenAd = true;
                    } else {
+                     console.log(`[Скрейпер] Объявление ${ad.avito_id} новое!`);
                      // Add to DB
                      markAdAsSeen(task.user_id, task.cat.id, ad.avito_id);
                      
                      // Send to user only if it matches filters
                      if (filteredAds.some(fAd => fAd.avito_id === ad.avito_id)) {
-                       await notifyUser(task.user_id, ad);
+                       console.log(`[Скрейпер] Отправляем объявление ${ad.avito_id} в VK.`);
+                       await notifyUser(task.user_id, ad, getCurrentProxy());
+                     } else {
+                       console.log(`[Скрейпер] Объявление ${ad.avito_id} отсеяно фильтром (цена/и т.д.). Игнорируем.`);
                      }
                    }
                  }
 
                  if (foundSeenAd) {
+                   console.log(`[Скрейпер] Дошли до ранее виденных объявлений на странице ${page}. Останавливаем обход категории ${task.cat.title}.`);
                    break; // We reached ads that are already in DB
                  }
 
                  page++;
-                 if (page > 10) break; // Hard limit for regular updates to avoid huge hits if something goes wrong
-                 await delay(getRandomInt(4000, 7000)); // Delay between pages
+                 // Ограничения: при инициализации можно листать до глубоких страниц (до 50),
+                 // при обычной работе - только первые 10 страниц, чтобы не делать лишних запросов
+                 const pageLimit = initializationMode ? 50 : 10;
+                 if (page > pageLimit) {
+                    console.log(`[Скрейпер] Достигнут жесткий лимит в ${pageLimit} страниц. Переход к следующей задаче.`);
+                    break;
+                 }
+                 const interPageWait = getRandomInt(4000, 7000);
+                 console.log(`[Скрейпер] Жду ${interPageWait} мс перед следующей страницей...`);
+                 await delay(interPageWait); // Delay between pages
               }
             } // end while(true)
             
             if (initializationMode) {
+               console.log(`[Скрейпер] Инициализация категории "${task.cat.title}" пользователя ${task.user_id} завершена. База наполнена.`);
                db.prepare('UPDATE categories SET is_initialized = 1 WHERE id = ?').run(task.cat.id);
                task.cat.is_initialized = 1;
                vk.api.messages.send({
@@ -227,9 +267,9 @@ export async function runSchedulerLoop() {
       continue; // Skip the normal random delay, go straight to next cycle after cooldown
     }
 
-    // Wait from 12 to 18 minutes (720000 to 1080000 ms) before next global run
-    const waitMs = getRandomInt(720000, 1080000);
-    console.log(`Waiting ${Math.floor(waitMs / 60000)} minutes until next check...`);
+    // Wait from 1 to 3 minutes (60000 to 180000 ms) before next global run
+    const waitMs = getRandomInt(60000, 180000);
+    console.log(`[Скрейпер] Ожидание ${Math.floor(waitMs / 1000)} секунд перед следующим циклом проверки...`);
     await delay(waitMs);
   }
 }
