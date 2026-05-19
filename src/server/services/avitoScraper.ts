@@ -108,23 +108,36 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
   
   if (customUrl) {
     url = customUrl.replace('m.avito.ru', 'www.avito.ru').replace('://avito.ru', '://www.avito.ru');
+    console.log(`[Скрейпер:Avito] Использую пользовательскую ссылку: ${url}`);
   } else if (searchQuery) {
     url = `${BASE_URL}/rossiya?q=${encodeURIComponent(searchQuery)}`;
+    console.log(`[Скрейпер:Avito] Формирую ссылку поиска: ${url}`);
   }
 
-  // Force sort by date (s=104) so that we always get newest items instead of old VIP items
-  // BUT only if it's not already set to something else that looks like a sort
-  try {
-    const parsedUrl = new URL(url);
-    if (!parsedUrl.searchParams.has('s')) {
-      parsedUrl.searchParams.set('s', '104');
+  // Force sort by date (s=104) only for standard categories, not for custom URLs
+  // The user wants the exact link they provided.
+  if (!customUrl) {
+    try {
+      const parsedUrl = new URL(url);
+      if (!parsedUrl.searchParams.has('s')) {
+        parsedUrl.searchParams.set('s', '104');
+      }
+      if (page > 1) {
+        parsedUrl.searchParams.set('p', page.toString());
+      }
+      url = parsedUrl.toString();
+    } catch(e) {
+      console.error('Failed to parse URL for sorting', e);
     }
-    if (page > 1) {
+  } else if (page > 1) {
+    // For custom URLs, only add page parameter if page > 1
+    try {
+      const parsedUrl = new URL(url);
       parsedUrl.searchParams.set('p', page.toString());
+      url = parsedUrl.toString();
+    } catch(e) {
+      console.error('Failed to parse custom URL for pagination', e);
     }
-    url = parsedUrl.toString();
-  } catch(e) {
-    console.error('Failed to parse URL for sorting', e);
   }
 
   try {
@@ -156,7 +169,8 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
     }
 
     // Обработка серверного редиректа в JSON (Suspense Redirect), часто бывает на десктопе
-    if (html.includes('"redirect":') && html.includes('"isSuspenseRedirect":true')) {
+    // Но будем осторожны: не переходим, если это пользовательская ссылка и пользователь просил не менять её.
+    if (!customUrl && html.includes('"redirect":') && html.includes('"isSuspenseRedirect":true')) {
        const match = html.match(/"redirect":"(.*?)"/);
        if (match && match[1]) {
           const redirectPath = match[1].replace(/\\u0026/g, '&');

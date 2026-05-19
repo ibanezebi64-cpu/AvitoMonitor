@@ -49,7 +49,7 @@ async function notifyAdmin(message: string) {
 // Function to send ad via VK with images and inline link button
 async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
   try {
-    let message = `🆕 Новое объявление!\\n\\n📌 ${ad.title}\\n💰 Цена: ${ad.price}`;
+    let message = `🆕 Новое объявление!\n\n📌 ${ad.title}\n💰 Цена: ${ad.price}`;
     
     const attachments: string[] = [];
     
@@ -62,17 +62,34 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
     for (const imgUrl of ad.images) {
       if (attachments.length >= 3) break;
       try {
-        const response = await axios.get(imgUrl, { 
-          responseType: 'arraybuffer', 
-          timeout: 20000,
-          httpsAgent: httpsAgent,
-          proxy: false,
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+        // Try without proxy first for images, as CDNs often hate proxies
+        let response;
+        try {
+          response = await axios.get(imgUrl, { 
+            responseType: 'arraybuffer', 
+            timeout: 10000,
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+            }
+          });
+        } catch (err) {
+          // If direct fails, try with proxy
+          if (httpsAgent) {
+             response = await axios.get(imgUrl, { 
+                responseType: 'arraybuffer', 
+                timeout: 15000,
+                httpsAgent: httpsAgent,
+                proxy: false,
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+                }
+             });
+          } else {
+             throw err;
           }
-        });
+        }
         
-        if (response.data && response.data.length > 0) {
+        if (response && response.data && response.data.length > 0) {
            const photo = await vk.upload.messagePhoto({
              source: { value: response.data, filename: 'image.jpg' }
            });
@@ -81,7 +98,7 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
         }
         
         // Help garbage collector
-        (response as any).data = null;
+        if (response) (response as any).data = null;
       } catch (e) {
         console.error(`Error uploading photo ${imgUrl} to VK:`, e);
       }
@@ -103,13 +120,29 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
   }
 }
 
+function cleanupDatabase() {
+  console.log('[Скрейпер] Очистка старых данных...');
+  try {
+    // Delete seen ads older than 7 days
+    db.prepare("DELETE FROM seen_ads WHERE created_at < datetime('now', '-7 days')").run();
+    console.log('[Скрейпер] Очистка завершена.');
+  } catch (e) {
+    console.error('Error in cleanupDatabase:', e);
+  }
+}
+
 export async function runSchedulerLoop() {
   console.log('[Скрейпер] Главный цикл запущен.');
   let consecutiveBlocks = 0;
   let wasBlocked = false;
+  let cycleCount = 0;
 
   while (true) {
     let blockCaughtInThisCycle = false;
+    cycleCount++;
+    if (cycleCount % 10 === 0) {
+      cleanupDatabase();
+    }
 
     try {
       const users = getAllActiveUsers();
@@ -221,7 +254,7 @@ export async function runSchedulerLoop() {
                      // Final check before notify: is user still active?
                      const checkUser = getUser(task.user_id);
                      if (checkUser && checkUser.is_active) {
-                        console.log(`[Скрейпер] Отправляем объявление ${ad.avito_id} в VK.`);
+                        console.log(`[Скрейпер] Отправляем объявление ${ad.avito_id} (${ad.title}) в VK. Изображений: ${ad.images.length}`);
                         await notifyUser(task.user_id, ad, getCurrentProxy());
                      }
                    }

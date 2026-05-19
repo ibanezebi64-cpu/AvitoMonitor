@@ -247,8 +247,7 @@ vk.updates.on('message_new', async (context, next) => {
 
   if (user.state.startsWith('await_avito_url')) {
     if (text.includes('avito.ru/')) {
-      // Find a domain and path roughly
-      const urlRegex = new RegExp('https?://[^\\\\s]+');
+      const urlRegex = /https?:\/\/\S+/;
       const urlMatch = text.match(urlRegex);
       if (urlMatch) {
          addCategory(user.vk_id, 'custom_url', 'Пользовательский поиск (Ссылка)', urlMatch[0]);
