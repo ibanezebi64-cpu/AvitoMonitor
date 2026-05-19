@@ -219,14 +219,22 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
       // Images - on Avito search result, sometimes multiple images are available in a source set or hidden tags
       const images: string[] = [];
 
-      // Try searching for more images in data-props or other attributes
+      // 1. Try get images from Microdata (SEO Friendly and usually reliable if present)
+      $(el).find('link[itemprop="image"], meta[itemprop="image"]').each((idx, metaEl) => {
+        const url = $(metaEl).attr('href') || $(metaEl).attr('content');
+        if (url && url.startsWith('http') && !images.includes(url)) {
+          images.push(url);
+        }
+      });
+
+      // 2. Try searching for images in data-props (Desktop version often has this)
       const dataProps = $(el).attr('data-props');
       if (dataProps) {
         try {
           const props = JSON.parse(dataProps);
           if (props.images && Array.isArray(props.images)) {
             props.images.forEach((img: any) => {
-              const url = img.url || img['636x476'] || img['432x324'];
+              const url = img.url || img['636x476'] || img['432x324'] || img['144x108'];
               if (url && url.startsWith('http') && !images.includes(url)) {
                 images.push(url);
               }
@@ -237,27 +245,60 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
         }
       }
 
-      if (images.length < 3) {
+      // 3. Fallback to img tags and picture sources with lazy loading support
+      if (images.length < 5) {
+        // Try picture sources first (better quality high-res candidates)
+        $(el).find('source[srcset], source[data-srcset]').each((idx, sourceEl) => {
+          const srcset = $(sourceEl).attr('srcset') || $(sourceEl).attr('data-srcset');
+          if (srcset) {
+             const sets = srcset.split(',').map(s => s.trim().split(' ')[0]);
+             if (sets.length > 0) {
+               const betterUrl = sets[sets.length - 1];
+               if (betterUrl && betterUrl.startsWith('http') && !images.includes(betterUrl)) {
+                 images.push(betterUrl);
+               }
+             }
+          }
+        });
+
+        // Try standard img tags
         $(el).find('img').each((idx, imgEl) => {
+          if (images.length >= 5) return;
+
           const src = $(imgEl).attr('src');
           const dataSrc = $(imgEl).attr('data-src');
-          const srcset = $(imgEl).attr('srcset');
+          const srcset = $(imgEl).attr('srcset') || $(imgEl).attr('data-srcset');
           
           let foundUrl = src || dataSrc;
           
-          // If srcset is present, try to get a better quality image
+          // If it's a small placeholder or empty, take data-src if available
+          if ((!foundUrl || foundUrl.startsWith('data:')) && dataSrc) {
+            foundUrl = dataSrc;
+          }
+
+          // If srcset/data-srcset is present, try to get a better quality image
           if (srcset) {
              const sets = srcset.split(',').map(s => s.trim().split(' ')[0]);
-             if (sets.length > 0) foundUrl = sets[sets.length - 1]; // highest quality usually
+             if (sets.length > 0) {
+               const betterUrl = sets[sets.length - 1]; // highest quality usually
+               if (betterUrl && betterUrl.startsWith('http')) {
+                 foundUrl = betterUrl;
+               }
+             }
           }
 
           const className = $(imgEl).attr('class') || '';
-          // Skip user avatars and dummy icons
+          
+          // Selection criteria:
+          // - must be http URL
+          // - skip known avatars and icons
           if (foundUrl && foundUrl.startsWith('http') && 
               !foundUrl.includes('avatar') && 
               !className.includes('avatar') && 
               !className.includes('seller') && 
-              !className.includes('icon')) {
+              !className.includes('icon') &&
+              !foundUrl.includes('/static/') && // skip small static assets
+              !foundUrl.includes('blank.gif')) {
             if (!images.includes(foundUrl)) {
                images.push(foundUrl);
             }

@@ -58,9 +58,10 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
       httpsAgent = new HttpsProxyAgent(proxyString);
     }
     
-    // Download and upload up to 3 images
+    // Download and upload up to 5 images
+    console.log(`[Скрейпер:VK] Начинаю загрузку изображений (${ad.images.length} найдено) для ${ad.avito_id}`);
     for (const imgUrl of ad.images) {
-      if (attachments.length >= 3) break;
+      if (attachments.length >= 5) break;
       try {
         // Try without proxy first for images, as CDNs often hate proxies
         let response;
@@ -75,6 +76,7 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
         } catch (err) {
           // If direct fails, try with proxy
           if (httpsAgent) {
+             console.log(`[Скрейпер:VK] Прямая загрузка ${imgUrl} не удалась, пробую через прокси...`);
              response = await axios.get(imgUrl, { 
                 responseType: 'arraybuffer', 
                 timeout: 15000,
@@ -89,18 +91,21 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
           }
         }
         
-        if (response && response.data && response.data.length > 0) {
-           const photo = await vk.upload.messagePhoto({
-             source: { value: response.data, filename: 'image.jpg' }
-           });
-           attachments.push(photo.toString());
-           await delay(1000); // 1s delay between photo uploads
+        if (response && response.data && response.data.length > 500) { // skip tiny transparent pixels
+            const photo = await vk.upload.messagePhoto({
+              source: { value: response.data, filename: 'image.jpg' }
+            });
+            attachments.push(photo.toString());
+            console.log(`[Скрейпер:VK] ✅ Изображение загружено (${attachments.length})`);
+            await delay(800); // reduced delay slightly but still safe
+        } else {
+            console.warn(`[Скрейпер:VK] ⚠️ Изображение ${imgUrl} слишком мало или пустое`);
         }
         
         // Help garbage collector
         if (response) (response as any).data = null;
-      } catch (e) {
-        console.error(`Error uploading photo ${imgUrl} to VK:`, e);
+      } catch (e: any) {
+        console.error(`[Скрейпер:VK] ❌ Ошибка загрузки фото ${imgUrl}:`, e.message);
       }
     }
 
