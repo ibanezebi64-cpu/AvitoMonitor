@@ -49,16 +49,15 @@ async function notifyAdmin(message: string) {
 // Function to send ad via VK with images and inline link button
 async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
   try {
-    let message = `🆕 Новое объявление!\n\n📌 ${ad.title}\n💰 Цена: ${ad.price}`;
+    const VK_MAX_LENGTH = 3800; // Safe limit for one VK message
     
+    let header = `🆕 Новое объявление!\n\n📌 ${ad.title}\n💰 Цена: ${ad.price}`;
     if (ad.date) {
-      message += `\n📅 ${ad.date}`;
+      header += `\n📅 ${ad.date}`;
     }
     
-    if (ad.description) {
-      const shortDesc = ad.description.length > 500 ? ad.description.substring(0, 500) + '...' : ad.description;
-      message += `\n\n📝 Описание:\n${shortDesc}`;
-    }
+    const description = ad.description || "";
+    const urlMessage = `\n\n🔗 Объявление: ${ad.url}`;
     
     const attachments: string[] = [];
     
@@ -67,26 +66,26 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
       httpsAgent = new HttpsProxyAgent(proxyString);
     }
     
-    // Download and upload up to 5 images
+    // Download and upload up to 5 images with retries
     console.log(`[Скрейпер:VK] Начинаю загрузку изображений (${ad.images.length} найдено) для ${ad.avito_id}`);
     for (const imgUrl of ad.images) {
       if (attachments.length >= 5) break;
-      try {
-        // Try without proxy first for images, as CDNs often hate proxies
-        let response;
+      
+      let success = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
         try {
-          response = await axios.get(imgUrl, { 
-            responseType: 'arraybuffer', 
-            timeout: 10000,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
-            }
-          });
-        } catch (err) {
-          // If direct fails, try with proxy
-          if (httpsAgent) {
-             console.log(`[Скрейпер:VK] Прямая загрузка ${imgUrl} не удалась, пробую через прокси...`);
-             response = await axios.get(imgUrl, { 
+          let response;
+          try {
+            response = await axios.get(imgUrl, { 
+              responseType: 'arraybuffer', 
+              timeout: 10000,
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+              }
+            });
+          } catch (err) {
+            if (httpsAgent) {
+              response = await axios.get(imgUrl, { 
                 responseType: 'arraybuffer', 
                 timeout: 15000,
                 httpsAgent: httpsAgent,
@@ -94,27 +93,26 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
                 headers: {
                   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
                 }
-             });
-          } else {
-             throw err;
+              });
+            } else {
+              throw err;
+            }
           }
-        }
-        
-        if (response && response.data && response.data.length > 500) { // skip tiny transparent pixels
+          
+          if (response && response.data && response.data.length > 500) {
             const photo = await vk.upload.messagePhoto({
               source: { value: response.data, filename: 'image.jpg' }
             });
             attachments.push(photo.toString());
-            console.log(`[Скрейпер:VK] ✅ Изображение загружено (${attachments.length})`);
-            await delay(800); // reduced delay slightly but still safe
-        } else {
-            console.warn(`[Скрейпер:VK] ⚠️ Изображение ${imgUrl} слишком мало или пустое`);
+            console.log(`[Скрейпер:VK] ✅ Изображение загружено с попытки ${attempt} (${attachments.length}/5)`);
+            success = true;
+            await delay(800);
+            break; 
+          }
+        } catch (e: any) {
+          console.warn(`[Скрейпер:VK] ⚠️ Попытка ${attempt}/3 для ${imgUrl} не удалась: ${e.message}`);
+          if (attempt < 3) await delay(1500 * attempt);
         }
-        
-        // Help garbage collector
-        if (response) (response as any).data = null;
-      } catch (e: any) {
-        console.error(`[Скрейпер:VK] ❌ Ошибка загрузки фото ${imgUrl}:`, e.message);
       }
     }
 
@@ -122,13 +120,46 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
       .urlButton({ label: 'Открыть объявление', url: ad.url })
       .inline(true);
 
-    await vk.api.messages.send({
-      user_id: vkId,
-      random_id: Math.floor(Math.random() * 1000000000),
-      message: message,
-      attachment: attachments.length > 0 ? attachments.join(',') : undefined,
-      keyboard: kb
-    });
+    const fullMessage = `${header}\n\n📝 Описание:\n${description}`;
+
+    if (fullMessage.length <= VK_MAX_LENGTH) {
+      await vk.api.messages.send({
+        user_id: vkId,
+        random_id: Math.floor(Math.random() * 1000000000),
+        message: fullMessage,
+        attachment: attachments.length > 0 ? attachments.join(',') : undefined,
+        keyboard: kb
+      });
+    } else {
+      // Split description across messages
+      const firstPartLimit = VK_MAX_LENGTH - 100;
+      const firstPart = fullMessage.substring(0, firstPartLimit);
+      
+      await vk.api.messages.send({
+        user_id: vkId,
+        random_id: Math.floor(Math.random() * 1000000000),
+        message: firstPart + '...',
+        attachment: attachments.length > 0 ? attachments.join(',') : undefined
+      });
+      
+      await delay(500);
+      
+      let remaining = fullMessage.substring(firstPartLimit);
+      while (remaining.length > 0) {
+        const chunk = remaining.substring(0, VK_MAX_LENGTH - 200);
+        const isLastChunk = chunk.length === remaining.length;
+        
+        await vk.api.messages.send({
+          user_id: vkId,
+          random_id: Math.floor(Math.random() * 1000000000),
+          message: (isLastChunk ? '... ' + chunk : '... ' + chunk + ' ...'),
+          keyboard: isLastChunk ? kb : undefined
+        });
+        
+        remaining = remaining.substring(chunk.length);
+        if (remaining.length > 0) await delay(500);
+      }
+    }
   } catch (error) {
     console.error(`Failed to send message to ${vkId}:`, error);
   }
