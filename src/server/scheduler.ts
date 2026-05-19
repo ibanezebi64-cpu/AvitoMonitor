@@ -66,10 +66,10 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
       httpsAgent = new HttpsProxyAgent(proxyString);
     }
     
-    // Download and upload up to 5 images with retries
+    // Download and upload up to 3 images with retries
     console.log(`[Скрейпер:VK] Начинаю загрузку изображений (${ad.images.length} найдено) для ${ad.avito_id}`);
     for (const imgUrl of ad.images) {
-      if (attachments.length >= 5) break;
+      if (attachments.length >= 3) break;
       
       let success = false;
       for (let attempt = 1; attempt <= 3; attempt++) {
@@ -104,7 +104,7 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
               source: { value: response.data, filename: 'image.jpg' }
             });
             attachments.push(photo.toString());
-            console.log(`[Скрейпер:VK] ✅ Изображение загружено с попытки ${attempt} (${attachments.length}/5)`);
+            console.log(`[Скрейпер:VK] ✅ Изображение загружено с попытки ${attempt} (${attachments.length}/3)`);
             success = true;
             await delay(800);
             break; 

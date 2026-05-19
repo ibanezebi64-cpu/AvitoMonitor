@@ -157,73 +157,65 @@ export async function fetchAdDetails(url: string, proxyUrl?: string): Promise<Pa
     const date = $('[data-marker="item-view/item-date"]').text().trim();
 
     // Images
-    const images: string[] = [];
+    let images: string[] = [];
     
-    // 1. Check item-view/gallery
-    $('[data-marker="item-view/gallery"] img').each((i, el) => {
+    // Strategy: Find all potential Avito image URLs on the page, 
+    // and "upscale" them by replacing typical size suffixes with a medium-quality one (636x476).
+    const upscaleUrl = (url: string) => {
+      if (!url || !url.includes('avito.st/image')) return url;
+      // Common Avito size patterns: 140x105, 144x108, 208x156, etc.
+      // We want to replace them with 636x476 which is usually available and good quality.
+      return url
+        .replace(/\/\d+x\d+\//, '/636x476/') // Replace size in path if any
+        .replace(/_\d+x\d+/, '_636x476')    // Replace size suffix if any
+        .replace(/image\/1\/1\.(.+?)\.(.+?)$/, (match, id, hash) => {
+           // If the hash seems to indicate a size, some patterns exist, but regular replace above covers most.
+           return match;
+        });
+    };
+
+    // 1. Main gallery data-marker
+    $('[data-marker^="item-view/gallery"] img').each((i, el) => {
        const src = $(el).attr('src') || $(el).attr('data-src');
-       if (src && src.startsWith('http') && !images.includes(src) && !src.includes('avatar')) {
-         images.push(src);
+       if (src && src.startsWith('http') && !src.includes('avatar')) {
+         const upscaled = upscaleUrl(src);
+         if (!images.includes(upscaled)) images.push(upscaled);
        }
     });
 
-    // 2. Check JSON data for high res images (often in window.__initialData__)
-    const scripts = $('script').toArray();
-    for (const script of scripts) {
-      const content = $(script).html() || '';
-      if (content.includes('window.__initialData__')) {
-        try {
-           const jsonStr = content.split('window.__initialData__ = "')[1].split('";')[0];
-           const decoded = decodeURIComponent(jsonStr);
-           const data = JSON.parse(decoded);
-           
-           // Search for images in the massive state object
-           const findImages = (obj: any, depth = 0) => {
-              if (depth > 15 || !obj || typeof obj !== 'object') return;
-              if (Array.isArray(obj)) {
-                 for (const item of obj) findImages(item, depth + 1);
-                 return;
-              }
-              
-              // Common Avito image object patterns in state
-              if (obj['636x476'] && typeof obj['636x476'] === 'string' && obj['636x476'].startsWith('http')) {
-                 if (!images.includes(obj['636x476'])) images.push(obj['636x476']);
-              } else if (obj['1280x960'] && typeof obj['1280x960'] === 'string' && obj['1280x960'].startsWith('http')) {
-                 if (!images.includes(obj['1280x960'])) images.push(obj['1280x960']);
-              } else if (obj.type === 'image' && obj.value && typeof obj.value === 'string' && obj.value.startsWith('http')) {
-                 if (!images.includes(obj.value)) images.push(obj.value);
-              }
-              
-              const keys = Object.keys(obj);
-              if (keys.length > 100) return; // Skip massive objects to avoid recursion hell
-              
-              for (const key of keys) {
-                if (['image', 'images', 'gallery', 'photo', 'photos'].includes(key.toLowerCase()) || typeof obj[key] === 'object') {
-                   findImages(obj[key], depth + 1);
-                }
-              }
-           };
-           findImages(data);
-        } catch(e) {}
-      }
-    }
-
-    // 3. Fallback to all images on page if nothing found
-    if (images.length === 0) {
-      $('img').each((i, el) => {
+    // 2. If we still need more images, check for low-res thumbnails and upscale them
+    if (images.length < 3) {
+      $('[data-marker="item-view/gallery-thumbnails"] img, .gallery-img, .image-frame img').each((i, el) => {
          const src = $(el).attr('src') || $(el).attr('data-src');
-         if (src && src.startsWith('http') && src.includes('avito.st/image') && !images.includes(src)) {
-           images.push(src);
+         if (src && src.startsWith('http') && !src.includes('avatar')) {
+            const upscaled = upscaleUrl(src);
+            if (!images.includes(upscaled)) images.push(upscaled);
          }
       });
     }
+
+    // 3. Fallback: search for any URL that looks like an Avito image
+    if (images.length < 3) {
+      const htmlString = $.html();
+      const imgRegex = /https?:\/\/[^\s"'<>]+?\.avito\.st\/image\/[^\s"'<>]+/g;
+      let match;
+      while ((match = imgRegex.exec(htmlString)) !== null && images.length < 10) {
+        const upscaled = upscaleUrl(match[0]);
+        if (!images.includes(upscaled)) images.push(upscaled);
+      }
+    }
+
+    // Clean up and filter
+    images = images
+      .filter(url => !url.includes('blank.gif') && !url.includes('avatar') && !url.includes('pixel'))
+      .slice(0, 3);
 
     return {
       title,
       price,
       description,
       date,
-      images: images.slice(0, 10).filter(url => !url.includes('blank.gif') && !url.includes('avatar'))
+      images
     };
   } catch (error: any) {
     if (error.message === 'BLOCKED') throw error;
