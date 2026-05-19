@@ -44,6 +44,12 @@ export function toggleUserTracking(vkId: number): boolean {
   const stmt = db.prepare('UPDATE users SET is_active = ? WHERE vk_id = ?');
   stmt.run(newState, vkId);
   
+  if (newState === 0) {
+    // If tracking is stopped, delete all seen ads and reset category initialization
+    db.prepare('DELETE FROM seen_ads WHERE user_id = ?').run(vkId);
+    db.prepare('UPDATE categories SET is_initialized = 0 WHERE user_id = ?').run(vkId);
+  }
+  
   return Boolean(newState);
 }
 

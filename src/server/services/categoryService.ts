@@ -39,12 +39,14 @@ export function removeCategory(categoryId: number, vkId: number) {
   const checkStmt = db.prepare('SELECT id FROM categories WHERE id = ? AND user_id = ?');
   const cat = checkStmt.get(categoryId, vkId);
   if (cat) {
+    db.prepare('DELETE FROM seen_ads WHERE category_id = ?').run(categoryId);
     const stmt = db.prepare('DELETE FROM categories WHERE id = ?');
     stmt.run(categoryId);
   }
 }
 
 export function removeAllCategories(vkId: number) {
+  db.prepare('DELETE FROM seen_ads WHERE user_id = ?').run(vkId);
   const stmt = db.prepare('DELETE FROM categories WHERE user_id = ?');
   stmt.run(vkId);
 }

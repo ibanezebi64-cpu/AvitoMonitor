@@ -31,6 +31,17 @@ export function advanceProxy() {
   }
 }
 
+export let currentProxyStatus = 'Ожидание первого запроса...';
+
+export function getStatusDescription(statusCode?: number, errorMsg?: string): string {
+  if (statusCode === 200) return '✅ Отлично (200)';
+  if (statusCode === 403) return '❌ Блок по IP (403)';
+  if (statusCode === 429) return '⚠️ Капча / Лимит запросов (429)';
+  if (statusCode === 407) return '❌ Ошибка авторизации прокси (407)';
+  if (statusCode) return `❌ Ошибка (${statusCode})`;
+  return `❌ Сбой (${errorMsg || 'Неизвестно'})`;
+}
+
 export async function testAllProxies(): Promise<string> {
   const proxies = getProxyList();
   if (proxies.length === 0) return 'Прокси не настроены в .env (PROXIES или PROXY_URL пуст).';
@@ -51,16 +62,18 @@ export async function testAllProxies(): Promise<string> {
           locales: ['ru-RU'],
           operatingSystems: ['windows', 'linux', 'android']
         },
-        timeout: { request: 15000 }
+        timeout: { request: 15000 },
+        throwHttpErrors: false
       });
-      msg += `✅ Успех: ${response.statusCode}\n`;
+      msg += `Статус: ${getStatusDescription(response.statusCode)}\n`;
     } catch (error: any) {
       if (error.response) {
-         msg += `❌ Ошибка (Код ${error.response.statusCode})\n`;
+         msg += `Статус: ${getStatusDescription(error.response.statusCode)}\n`;
       } else {
-         msg += `❌ Ошибка соединения (${error.code || error.message})\n`;
+         msg += `Статус: ${getStatusDescription(undefined, error.code || error.message)}\n`;
       }
     }
+    msg += '\n';
   }
 
   return msg;
@@ -124,6 +137,7 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
     });
 
     const html = response.body;
+    currentProxyStatus = '✅ Отлично (200)';
     const $ = cheerio.load(html);
 
     const ads: ScrapedAd[] = [];
@@ -172,21 +186,25 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
     return ads;
   } catch (error: any) {
     if (error.response && [403, 429, 407, 502, 503].includes(error.response.statusCode)) {
+      currentProxyStatus = getStatusDescription(error.response.statusCode);
       console.error(`Avito/Proxy Blocked us (${error.response.statusCode}) on ${url}`);
       throw new Error('BLOCKED');
     }
     
     if (error.message && (error.message.includes('407 Proxy Authentication Required') || error.message.includes('Proxy responded with') || error.message.includes('tunneling socket could not be established'))) {
+      currentProxyStatus = getStatusDescription(407);
       console.error(`Proxy error on ${url}: ${error.message}`);
       throw new Error('BLOCKED');
     }
 
     // Also treat generic network / proxy connection errors as a reason to switch proxy
     if (error.code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH', 'ECONNREFUSED'].includes(error.code)) {
+      currentProxyStatus = getStatusDescription(undefined, error.code);
       console.error(`Network error (${error.code}) on ${url}, treating as block.`);
       throw new Error('BLOCKED');
     }
 
+    currentProxyStatus = getStatusDescription(undefined, error.message);
     console.error(`Error fetching Avito for category ${categoryCode}:`, error.message);
     return [];
   }

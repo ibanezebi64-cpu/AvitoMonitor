@@ -413,8 +413,14 @@ vk.updates.on('message_new', async (context, next) => {
       .textButton({ label: '🌐 Проверить прокси', payload: { command: 'admin_test_proxy' }, color: Keyboard.PRIMARY_COLOR }).row()
       .textButton({ label: '« К боту', payload: { command: 'main' }, color: Keyboard.SECONDARY_COLOR }).inline(true);
 
+    const { getCurrentProxy, currentProxyStatus } = require('./services/avitoScraper');
+    const proxy = getCurrentProxy();
+    let msg = `👑 Панель администратора:\n\n`;
+    msg += `Текущий прокси: ${proxy ? proxy : 'Локальный IP'}\n`;
+    msg += `Статус: ${currentProxyStatus}`;
+
     await context.send({
-      message: '👑 Панель администратора:',
+      message: msg,
       keyboard: kb
     });
     return;

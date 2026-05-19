@@ -18,14 +18,14 @@ function getRandomInt(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function hasSeenAd(vkId: number, avitoId: string): boolean {
-  const stmt = db.prepare('SELECT id FROM seen_ads WHERE user_id = ? AND avito_id = ?');
-  return !!stmt.get(vkId, avitoId);
+function hasSeenAd(vkId: number, categoryId: number, avitoId: string): boolean {
+  const stmt = db.prepare('SELECT id FROM seen_ads WHERE user_id = ? AND category_id = ? AND avito_id = ?');
+  return !!stmt.get(vkId, categoryId, avitoId);
 }
 
-function markAdAsSeen(vkId: number, avitoId: string) {
-  const stmt = db.prepare('INSERT INTO seen_ads (user_id, avito_id) VALUES (?, ?)');
-  stmt.run(vkId, avitoId);
+function markAdAsSeen(vkId: number, categoryId: number, avitoId: string) {
+  const stmt = db.prepare('INSERT INTO seen_ads (user_id, category_id, avito_id) VALUES (?, ?, ?)');
+  stmt.run(vkId, categoryId, avitoId);
 }
 
 async function notifyAdmin(message: string) {
@@ -143,8 +143,8 @@ export async function runSchedulerLoop() {
               if (initializationMode) {
                  // First run: just save all ads to as seen, so they don't trigger notifications later.
                  for (const ad of ads) {
-                   if (!hasSeenAd(task.user_id, ad.avito_id)) {
-                     markAdAsSeen(task.user_id, ad.avito_id);
+                   if (!hasSeenAd(task.user_id, task.cat.id, ad.avito_id)) {
+                     markAdAsSeen(task.user_id, task.cat.id, ad.avito_id);
                    }
                  }
                  page++;
@@ -164,11 +164,11 @@ export async function runSchedulerLoop() {
                  });
 
                  for (const ad of ads) {
-                   if (hasSeenAd(task.user_id, ad.avito_id)) {
+                   if (hasSeenAd(task.user_id, task.cat.id, ad.avito_id)) {
                      foundSeenAd = true;
                    } else {
                      // Add to DB
-                     markAdAsSeen(task.user_id, ad.avito_id);
+                     markAdAsSeen(task.user_id, task.cat.id, ad.avito_id);
                      
                      // Send to user only if it matches filters
                      if (filteredAds.some(fAd => fAd.avito_id === ad.avito_id)) {

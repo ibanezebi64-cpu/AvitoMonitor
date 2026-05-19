@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 
 export const db = new Database('database.sqlite', { verbose: console.log });
+db.pragma('foreign_keys = ON');
 
 export function initDB() {
   // Enable Write-Ahead Log for better performance/concurrency
@@ -38,8 +39,10 @@ export function initDB() {
     CREATE TABLE IF NOT EXISTS seen_ads (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       avito_id TEXT,
+      category_id INTEGER,
       user_id INTEGER,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(category_id) REFERENCES categories(id) ON DELETE CASCADE,
       FOREIGN KEY(user_id) REFERENCES users(vk_id) ON DELETE CASCADE
     );
   `);
@@ -51,10 +54,20 @@ export function initDB() {
   }
 
   try {
+    db.prepare('ALTER TABLE seen_ads ADD COLUMN category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE').run();
+  } catch(e) {
+    // Column might already exist
+  }
+
+  try {
     db.exec(`ALTER TABLE filters ADD COLUMN url TEXT;`);
   } catch (e) {
     // Column already exists
   }
+  
+  // Clean up any orphaned records
+  db.prepare('DELETE FROM seen_ads WHERE category_id IS NOT NULL AND category_id NOT IN (SELECT id FROM categories)').run();
+  db.prepare('DELETE FROM filters WHERE category_id NOT IN (SELECT id FROM categories)').run();
 
   console.log('Database initialized successfully.');
 }
