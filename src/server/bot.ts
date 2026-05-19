@@ -425,21 +425,12 @@ vk.updates.on('message_new', async (context, next) => {
       .textButton({ label: '« Назад', payload: { command: 'admin_panel' }, color: Keyboard.SECONDARY_COLOR }).inline(true);
 
     try {
-      const axios = require('axios');
-      const { HttpsProxyAgent } = require('https-proxy-agent');
-      const axiosConfig: any = { timeout: 10000 };
-      let msg = '';
-
-      if (process.env.PROXY_URL) {
-        axiosConfig.httpsAgent = new HttpsProxyAgent(process.env.PROXY_URL);
-        axiosConfig.proxy = false;
-        msg += 'Прокси настроен. ';
-      } else {
-        msg += '⚠️ PROXY_URL не найден в .env. ';
-      }
-
-      const res = await axios.get('https://api.ipify.org?format=json', axiosConfig);
-      msg += `\\nВаш текущий IP (через запрос): ${res.data.ip}`;
+      await context.send({
+        message: '⏳ Начинаю проверку всех прокси на доступность Авито. Это может занять некоторое время...',
+      });
+      
+      const { testAllProxies } = require('./services/avitoScraper');
+      const msg = await testAllProxies();
 
       await context.send({
         message: msg,
@@ -447,7 +438,7 @@ vk.updates.on('message_new', async (context, next) => {
       });
     } catch (e: any) {
       await context.send({
-        message: `❌ Ошибка проверки прокси: ${e.message}`,
+        message: `❌ Ошибка скрипта: ${e.message}`,
         keyboard: kb
       });
     }

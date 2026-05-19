@@ -8,7 +8,7 @@ let currentProxyIndex = 0;
 export function getProxyList(): string[] {
   const proxiesStr = process.env.PROXIES || '';
   if (!proxiesStr) {
-    if (process.env.PROXY_URL) return [process.env.PROXY_URL];
+    if (process.env.PROXY_URL) return process.env.PROXY_URL.split(',').map(p => p.trim()).filter(p => p.length > 0);
     return [];
   }
   return proxiesStr.split(',').map(p => p.trim()).filter(p => p.length > 0);
@@ -29,6 +29,41 @@ export function advanceProxy() {
   if (proxies.length > 0) {
     currentProxyIndex = (currentProxyIndex + 1) % proxies.length;
   }
+}
+
+export async function testAllProxies(): Promise<string> {
+  const proxies = getProxyList();
+  if (proxies.length === 0) return 'Прокси не настроены в .env (PROXIES или PROXY_URL пуст).';
+  
+  let msg = `Найдено прокси: ${proxies.length}\n\n`;
+  const { gotScraping } = await import('got-scraping');
+
+  for (let i = 0; i < proxies.length; i++) {
+    const proxy = proxies[i];
+    msg += `${i + 1}. ${proxy}\n`;
+    try {
+      const response = await gotScraping({
+        url: 'https://m.avito.ru/rossiya',
+        proxyUrl: proxy,
+        headerGeneratorOptions: {
+          browsers: [{ name: 'chrome', minVersion: 110 }],
+          devices: ['desktop', 'mobile'],
+          locales: ['ru-RU'],
+          operatingSystems: ['windows', 'linux', 'android']
+        },
+        timeout: { request: 15000 }
+      });
+      msg += `✅ Успех: ${response.statusCode}\n`;
+    } catch (error: any) {
+      if (error.response) {
+         msg += `❌ Ошибка (Код ${error.response.statusCode})\n`;
+      } else {
+         msg += `❌ Ошибка соединения (${error.code || error.message})\n`;
+      }
+    }
+  }
+
+  return msg;
 }
 
 export interface ScrapedAd {
