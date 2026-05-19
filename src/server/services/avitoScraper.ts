@@ -14,6 +14,10 @@ export function getProxyList(): string[] {
   return proxiesStr.split(',').map(p => p.trim()).filter(p => p.length > 0);
 }
 
+export function getProxyCount(): number {
+  return getProxyList().length;
+}
+
 export function getCurrentProxy(): string | undefined {
   const proxies = getProxyList();
   if (proxies.length === 0) return undefined;

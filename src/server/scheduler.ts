@@ -3,7 +3,7 @@ import { VK, Keyboard } from 'vk-io';
 import axios from 'axios';
 import { getUser, getAllActiveUsers } from './services/userService';
 import { getUserCategories, getCategoryFilters, Category } from './services/categoryService';
-import { fetchCategoryAds, ScrapedAd, advanceProxy, getCurrentProxy, fetchAdDetails } from './services/avitoScraper';
+import { fetchCategoryAds, ScrapedAd, advanceProxy, getCurrentProxy, fetchAdDetails, getProxyCount } from './services/avitoScraper';
 import { db } from './database';
 import dotenv from 'dotenv';
 import { CookieJar } from 'tough-cookie';
@@ -14,6 +14,9 @@ const vk = new VK({
   uploadTimeout: 60000 
 });
 const ADMIN_VK_ID = process.env.ADMIN_VK_ID ? parseInt(process.env.ADMIN_VK_ID, 10) : 0;
+
+let lastProxyRotationTime = Date.now();
+let plannedRotationInterval = getRandomInt(120, 180) * 60 * 1000; // 2-3 hours
 
 function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -179,14 +182,21 @@ function cleanupDatabase() {
 export async function runSchedulerLoop() {
   console.log('[Скрейпер] Главный цикл запущен.');
   let consecutiveBlocks = 0;
-  let wasBlocked = false;
   let cycleCount = 0;
+  let isHalted = false;
 
-  while (true) {
-    let blockCaughtInThisCycle = false;
+  while (!isHalted) {
     cycleCount++;
     if (cycleCount % 10 === 0) {
       cleanupDatabase();
+    }
+
+    // Planned proxy rotation every 2-3 hours
+    if (Date.now() - lastProxyRotationTime > plannedRotationInterval) {
+      advanceProxy();
+      lastProxyRotationTime = Date.now();
+      plannedRotationInterval = getRandomInt(120, 180) * 60 * 1000;
+      console.log(`[Скрейпер] Плановая смена прокси. Новый: ${getCurrentProxy() || 'Локальный'}`);
     }
 
     try {
@@ -194,7 +204,6 @@ export async function runSchedulerLoop() {
       if (users.length > 0) {
         console.log(`[Скрейпер] Найдено: ${users.length} активных пользователей для проверки.`);
 
-        // Gather all categories to avoid duplicate hits on Avito
         const allTasks: { user_id: number, cat: Category }[] = [];
         for (const u of users) {
           const cats = getUserCategories(u.vk_id);
@@ -204,19 +213,13 @@ export async function runSchedulerLoop() {
         console.log(`[Скрейпер] Всего задач (категорий) в очереди: ${allTasks.length}`);
 
         for (const task of allTasks) {
+          if (isHalted) break;
           try {
-            // Check if user is still active and category still exists before running task
             const currentUser = getUser(task.user_id);
-            if (!currentUser || !currentUser.is_active) {
-                console.log(`[Скрейпер] Пользователь ${task.user_id} теперь неактивен. Пропускаю задачу.`);
-                continue;
-            }
+            if (!currentUser || !currentUser.is_active) continue;
 
             const currentCat = db.prepare('SELECT * FROM categories WHERE id = ?').get(task.cat.id);
-            if (!currentCat) {
-                console.log(`[Скрейпер] Категория ${task.cat.id} была удалена. Пропускаю задачу.`);
-                continue;
-            }
+            if (!currentCat) continue;
 
             console.log(`[Скрейпер] Запуск парсинга. Пользователь: ${task.user_id}, Категория: "${task.cat.title}"`);
             const filters = getCategoryFilters(task.cat.id);
@@ -227,181 +230,138 @@ export async function runSchedulerLoop() {
             let referer = 'https://www.avito.ru/';
 
             while (true) {
-              // Check if user is still active and category still exists inside the loop to allow stopping
+              if (isHalted) break;
               const currentUserLoop = getUser(task.user_id);
-              if (!currentUserLoop || !currentUserLoop.is_active) {
-                  console.log(`[Скрейпер] Пользователь ${task.user_id} стал неактивен во время парсинга. Останавливаю.`);
-                  break;
-              }
+              if (!currentUserLoop || !currentUserLoop.is_active) break;
+              
               const currentCatLoop = db.prepare('SELECT id FROM categories WHERE id = ?').get(task.cat.id);
-              if (!currentCatLoop) {
-                  console.log(`[Скрейпер] Категория ${task.cat.id} была удалена во время парсинга. Останавливаю.`);
-                  break;
-              }
+              if (!currentCatLoop) break;
 
-              console.log(`[Скрейпер] -> Читаю страницу ${page} для категории: ${task.cat.title}... (initializationMode: ${initializationMode})`);
+              console.log(`[Скрейпер] -> Читаю страницу ${page} для категории: ${task.cat.title}...`);
               let ads: ScrapedAd[] = [];
-              try {
-                ads = await fetchCategoryAds(task.cat.category_code, filters?.search_query, filters?.url, page, cookieJar, sessionToken, referer);
-                // Update referer to current page URL for next request
-                referer = typeof filters?.url === 'string' && filters.url 
-                          ? filters.url + (page > 1 ? `&p=${page}` : '') 
-                          : `https://www.avito.ru/rossiya/${task.cat.category_code}?p=${page}`;
-                
-                // If fetch executes successfully without throw, reset block counter
-                if (wasBlocked && consecutiveBlocks > 0) {
-                    notifyAdmin(`✅ Парсер вышел из блока и успешно продолжил работу! (Прокси: ${getCurrentProxy() || 'Локальный'})`);
-                }
-                consecutiveBlocks = 0;
-                wasBlocked = false;
-              } catch (fetchError: any) {
-                if (fetchError.message === 'BLOCKED') {
-                  advanceProxy();
-                  const nextProxy = getCurrentProxy();
-                  notifyAdmin(`⚠️ Столкнулся с капчей/блоком, переключаюсь на другой прокси: ${nextProxy || 'Локальный'} (Категория: ${task.cat.title}, Страница: ${page})`);
-                  consecutiveBlocks++;
-                  if (consecutiveBlocks >= 20) {
-                     // Too many blocks even with proxies, exit for cooldown
-                     blockCaughtInThisCycle = true;
-                     wasBlocked = true;
-                     break; 
+              let fetchSuccess = false;
+              let retries = 0;
+              const maxRetriesPerRequest = Math.max(1, getProxyCount());
+
+              while (retries < maxRetriesPerRequest && !fetchSuccess) {
+                try {
+                  ads = await fetchCategoryAds(task.cat.category_code, filters?.search_query, filters?.url, page, cookieJar, sessionToken, referer);
+                  fetchSuccess = true;
+                  consecutiveBlocks = 0; // Reset global counter on success
+                } catch (fetchError: any) {
+                  if (fetchError.message === 'BLOCKED') {
+                    consecutiveBlocks++;
+                    retries++;
+                    advanceProxy();
+                    const nextProxy = getCurrentProxy();
+                    console.warn(`[Скрейпер] Блок на странице ${page}. Попытка ${retries}/${maxRetriesPerRequest}. След. прокси: ${nextProxy || 'Локальный'}`);
+                    
+                    // User requested: stop after 2 full rounds of blocks
+                    const proxyCount = getProxyCount() || 1; 
+                    if (consecutiveBlocks >= proxyCount * 2) {
+                       const fatalMsg = `🛑 КРИТИЧЕСКАЯ ОШИБКА: Все прокси (${consecutiveBlocks} попыток) заблокированы. Работа парсера остановлена. Пожалуйста, обновите список прокси!`;
+                       console.error(fatalMsg);
+                       await notifyAdmin(fatalMsg);
+                       isHalted = true;
+                       break;
+                    }
+                    await delay(getRandomInt(5000, 10000));
+                  } else {
+                    throw fetchError;
                   }
-                  await delay(getRandomInt(5000, 10000));
-                  continue; // Retry the same page with a new proxy
-                } else {
-                  throw fetchError;
                 }
               }
 
-              console.log(`[Скрейпер] Успешно получено: ${ads.length} объявлений. Категория: ${task.cat.title}, Страница: ${page}`);
+              if (isHalted || !fetchSuccess) break;
 
-              if (ads.length === 0) {
-                 console.log(`[Скрейпер] На странице ${page} нет объявлений. Прекращаю обход категории ${task.cat.title}.`);
-                 break;
-              }
+              referer = typeof filters?.url === 'string' && filters.url 
+                        ? filters.url + (page > 1 ? `&p=${page}` : '') 
+                        : `https://www.avito.ru/rossiya/${task.cat.category_code}?p=${page}`;
+
+              if (ads.length === 0) break;
 
               if (initializationMode) {
-                 // First run: just save all ads to as seen, so they don't trigger notifications later.
                  for (const ad of ads) {
                    if (!hasSeenAd(task.user_id, task.cat.id, ad.avito_id)) {
                      markAdAsSeen(task.user_id, task.cat.id, ad.avito_id);
                    }
                  }
                  page++;
-                 if (page > 30) break; // Limit initialization to max 30 pages to prevent infinite loops / rate limits
+                 if (page > 30) break;
                  await delay(getRandomInt(3000, 7000));
               } else {
                  let foundSeenAd = false;
-                 
                  for (const ad of ads) {
-                   // Re-check if category still exists before marking seen (avoid FK error)
-                   const checkCat = db.prepare('SELECT id FROM categories WHERE id = ?').get(task.cat.id);
-                   if (!checkCat) {
-                     console.log(`[Скрейпер] Категория ${task.cat.id} была удалена в процессе. Отмена.`);
-                     break;
-                   }
-
                     if (hasSeenAd(task.user_id, task.cat.id, ad.avito_id)) {
                       foundSeenAd = true;
                     } else {
-                      console.log(`[Скрейпер] Объявление ${ad.avito_id} новое!`);
-                      // Add to DB
                       markAdAsSeen(task.user_id, task.cat.id, ad.avito_id);
-                      
-                      // Final check before notify: is user still active?
                       const checkUser = getUser(task.user_id);
                       if (checkUser && checkUser.is_active) {
-                         // Enrich ad details by visiting the ad page
-                         try {
-                            const details = await fetchAdDetails(ad.url, getCurrentProxy());
-                            if (details.title) ad.title = details.title;
-                            if (details.price) ad.price = details.price;
-                            if (details.images && details.images.length > 0) ad.images = details.images;
-                            ad.description = details.description;
-                            ad.date = details.date;
-                         } catch (e: any) {
-                            if (e.message === 'BLOCKED') {
-                               advanceProxy();
-                               console.warn(`[Скрейпер] Поймали блок при получении деталей объявления. Прокси переключен.`);
-                            }
-                            console.error(`[Скрейпер] Не удалось получить детальную информацию для ${ad.avito_id}, отправляю базовую информацию из списка.`);
+                         // Enrich details with retry logic for detail page too
+                         let details: any = {};
+                         let detailSuccess = false;
+                         let detailRetries = 0;
+                         while (detailRetries < 2 && !detailSuccess) {
+                           try {
+                              details = await fetchAdDetails(ad.url, getCurrentProxy());
+                              detailSuccess = true;
+                           } catch (e: any) {
+                              if (e.message === 'BLOCKED') {
+                                consecutiveBlocks++;
+                                advanceProxy();
+                                detailRetries++;
+                                await delay(3000);
+                              } else break;
+                           }
                          }
 
-                         console.log(`[Скрейпер] Отправляем объявление ${ad.avito_id} (${ad.title}) в VK. Изображений: ${ad.images.length}`);
+                         if (details.title) ad.title = details.title;
+                         if (details.price) ad.price = details.price;
+                         if (details.images && details.images.length > 0) ad.images = details.images;
+                         ad.description = details.description;
+                         ad.date = details.date;
+
+                         console.log(`[Скрейпер] Отправляем 8137258015 (${ad.title})`);
                          await notifyUser(task.user_id, ad, getCurrentProxy());
                       }
                     }
                  }
-
-                 if (foundSeenAd) {
-                   console.log(`[Скрейпер] Дошли до ранее виденных объявлений на странице ${page}. Останавливаем обход категории ${task.cat.title}.`);
-                   break; // We reached ads that are already in DB
-                 }
-
+                 if (foundSeenAd) break;
                  page++;
-                 // Ограничения: при инициализации можно листать до глубоких страниц (до 50),
-                 // при обычной работе - только первые 10 страниц, чтобы не делать лишних запросов
-                 const pageLimit = initializationMode ? 50 : 10;
-                 if (page > pageLimit) {
-                    console.log(`[Скрейпер] Достигнут жесткий лимит в ${pageLimit} страниц. Переход к следующей задаче.`);
-                    break;
-                 }
-                 const interPageWait = getRandomInt(4000, 7000);
-                 console.log(`[Скрейпер] Жду ${interPageWait} мс перед следующей страницей...`);
-                 await delay(interPageWait); // Delay between pages
+                 if (page > 10) break;
+                 await delay(getRandomInt(4000, 7000));
               }
-            } // end while(true)
+            } 
             
-            if (initializationMode) {
-               // Only complete initialization if user is still active
+            if (!isHalted && initializationMode) {
                const checkActiveAtEnd = getUser(task.user_id);
                if (checkActiveAtEnd && checkActiveAtEnd.is_active) {
-                 console.log(`[Скрейпер] Инициализация категории "${task.cat.title}" пользователя ${task.user_id} завершена. База наполнена.`);
                  db.prepare('UPDATE categories SET is_initialized = 1 WHERE id = ?').run(task.cat.id);
-                 task.cat.is_initialized = 1;
                  vk.api.messages.send({
                    user_id: task.user_id,
                    random_id: Math.floor(Math.random() * 1000000000),
-                   message: `✅ Категория "${task.cat.title}" к работе готова! Исходная база объявлений собрана.`
-                 }).catch(e => console.error(e));
-               } else {
-                 console.log(`[Скрейпер] Инициализация категории "${task.cat.title}" прервана (пользователь неактивен).`);
+                   message: `✅ Категория "${task.cat.title}" готова! База собрана.`
+                 }).catch(() => {});
                }
             }
 
-            // Random delay between tasks
             await delay(getRandomInt(15000, 30000));
-            if (blockCaughtInThisCycle) {
-               break; // Pass the break to the outer loop to start cooldown
-            }
-          } catch (fetchError: any) {
-            console.error(`Error in task ${task.cat.title}:`, fetchError);
+          } catch (error) {
+            console.error(`Task error:`, error);
           }
         }
       }
-
     } catch (e) {
-      console.error('Error in scheduler loop:', e);
+      console.error('Scheduler error:', e);
     }
 
-    if (blockCaughtInThisCycle) {
-      consecutiveBlocks++;
-      let penaltyMinutes = 60;
-      if (consecutiveBlocks === 1) penaltyMinutes = 60;
-      else if (consecutiveBlocks === 2) penaltyMinutes = 4 * 60;
-      else penaltyMinutes = 24.5 * 60;
-
-      const blockMsg = `Парсер словил блок Avito (403/429)!\\nКоличество блоков подряд: ${consecutiveBlocks}.\\nОхлаждение: ${penaltyMinutes} минут.`;
-      console.warn(blockMsg);
-      await notifyAdmin(blockMsg);
-      
-      await delay(penaltyMinutes * 60 * 1000);
-      continue; // Skip the normal random delay, go straight to next cycle after cooldown
+    if (isHalted) {
+      console.warn('[Скрейпер] Парсер остановлен до вмешательства администратора.');
+      break; 
     }
 
-    // Wait from 1 to 3 minutes (60000 to 180000 ms) before next global run
     const waitMs = getRandomInt(60000, 180000);
-    console.log(`[Скрейпер] Ожидание ${Math.floor(waitMs / 1000)} секунд перед следующим циклом проверки...`);
     await delay(waitMs);
   }
 }
