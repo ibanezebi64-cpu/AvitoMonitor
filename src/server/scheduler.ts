@@ -54,7 +54,7 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
   try {
     const VK_MAX_LENGTH = 3800; // Safe limit for one VK message
     
-    let header = `🆕 Новое объявление!\n\n📌 ${ad.title}\n💰 Цена: ${ad.price}`;
+    let header = `📌 ${ad.title}\n💰 Цена: ${ad.price}`;
     if (ad.date) {
       header += `\n📅 ${ad.date}`;
     }
