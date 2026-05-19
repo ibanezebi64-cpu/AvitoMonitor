@@ -3,7 +3,7 @@ import { VK, Keyboard } from 'vk-io';
 import axios from 'axios';
 import { getUser, getAllActiveUsers } from './services/userService';
 import { getUserCategories, getCategoryFilters, Category } from './services/categoryService';
-import { fetchCategoryAds, ScrapedAd, advanceProxy, getCurrentProxy } from './services/avitoScraper';
+import { fetchCategoryAds, ScrapedAd, advanceProxy, getCurrentProxy, fetchAdDetails } from './services/avitoScraper';
 import { db } from './database';
 import dotenv from 'dotenv';
 import { CookieJar } from 'tough-cookie';
@@ -50,6 +50,15 @@ async function notifyAdmin(message: string) {
 async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
   try {
     let message = `🆕 Новое объявление!\n\n📌 ${ad.title}\n💰 Цена: ${ad.price}`;
+    
+    if (ad.date) {
+      message += `\n📅 ${ad.date}`;
+    }
+    
+    if (ad.description) {
+      const shortDesc = ad.description.length > 500 ? ad.description.substring(0, 500) + '...' : ad.description;
+      message += `\n\n📝 Описание:\n${shortDesc}`;
+    }
     
     const attachments: string[] = [];
     
@@ -261,20 +270,36 @@ export async function runSchedulerLoop() {
                      break;
                    }
 
-                   if (hasSeenAd(task.user_id, task.cat.id, ad.avito_id)) {
-                     foundSeenAd = true;
-                   } else {
-                     console.log(`[Скрейпер] Объявление ${ad.avito_id} новое!`);
-                     // Add to DB
-                     markAdAsSeen(task.user_id, task.cat.id, ad.avito_id);
-                     
-                     // Final check before notify: is user still active?
-                     const checkUser = getUser(task.user_id);
-                     if (checkUser && checkUser.is_active) {
-                        console.log(`[Скрейпер] Отправляем объявление ${ad.avito_id} (${ad.title}) в VK. Изображений: ${ad.images.length}`);
-                        await notifyUser(task.user_id, ad, getCurrentProxy());
-                     }
-                   }
+                    if (hasSeenAd(task.user_id, task.cat.id, ad.avito_id)) {
+                      foundSeenAd = true;
+                    } else {
+                      console.log(`[Скрейпер] Объявление ${ad.avito_id} новое!`);
+                      // Add to DB
+                      markAdAsSeen(task.user_id, task.cat.id, ad.avito_id);
+                      
+                      // Final check before notify: is user still active?
+                      const checkUser = getUser(task.user_id);
+                      if (checkUser && checkUser.is_active) {
+                         // Enrich ad details by visiting the ad page
+                         try {
+                            const details = await fetchAdDetails(ad.url, getCurrentProxy());
+                            if (details.title) ad.title = details.title;
+                            if (details.price) ad.price = details.price;
+                            if (details.images && details.images.length > 0) ad.images = details.images;
+                            ad.description = details.description;
+                            ad.date = details.date;
+                         } catch (e: any) {
+                            if (e.message === 'BLOCKED') {
+                               advanceProxy();
+                               console.warn(`[Скрейпер] Поймали блок при получении деталей объявления. Прокси переключен.`);
+                            }
+                            console.error(`[Скрейпер] Не удалось получить детальную информацию для ${ad.avito_id}, отправляю базовую информацию из списка.`);
+                         }
+
+                         console.log(`[Скрейпер] Отправляем объявление ${ad.avito_id} (${ad.title}) в VK. Изображений: ${ad.images.length}`);
+                         await notifyUser(task.user_id, ad, getCurrentProxy());
+                      }
+                    }
                  }
 
                  if (foundSeenAd) {

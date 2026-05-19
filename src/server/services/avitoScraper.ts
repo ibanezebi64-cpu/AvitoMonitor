@@ -88,6 +88,148 @@ export interface ScrapedAd {
   price: string;
   url: string;
   images: string[];
+  description?: string;
+  date?: string;
+}
+
+export async function fetchAdDetails(url: string, proxyUrl?: string): Promise<Partial<ScrapedAd>> {
+  console.log(`[Скрейпер:Avito] Перехожу на страницу объявления: ${url}`);
+  await delay(getRandomInt(2000, 5000));
+
+  try {
+    const { gotScraping } = await import('got-scraping');
+    const response = await gotScraping({
+      url,
+      proxyUrl,
+      headerGeneratorOptions: {
+        browsers: [{ name: 'chrome', minVersion: 110 }, { name: 'safari', minVersion: 15 }],
+        devices: ['desktop'],
+        locales: ['ru-RU', 'ru;q=0.9'],
+        operatingSystems: ['windows', 'macos']
+      },
+      headers: {
+        'referer': 'https://www.avito.ru/'
+      },
+      timeout: { request: 30000 }
+    });
+
+    const html = response.body;
+    if (html.includes('auth-form') || html.includes('Доступ временно заблокирован') || html.includes('firewall')) {
+      throw new Error('BLOCKED');
+    }
+
+    const $ = cheerio.load(html);
+    
+    // Attempt to extract title
+    let title = $('[data-marker="item-view/title-info"]').text().trim() || $('h1').first().text().trim();
+    
+    // Attempt to extract price - handle different formats
+    let price = $('[data-marker="item-view/price-value"]').text().trim();
+    if (!price) {
+        price = $('.js-item-price').attr('content') || $('.price-value-string').text().trim();
+    }
+
+    // Extraction from JSON-LD is often more reliable for core fields
+    let ldData: any = null;
+    $('script[type="application/ld+json"]').each((i, el) => {
+      try {
+        const content = $(el).html();
+        if (content) {
+          const parsed = JSON.parse(content);
+          if (parsed['@type'] === 'Product' || (Array.isArray(parsed) && parsed.find((p: any) => p['@type'] === 'Product'))) {
+            ldData = Array.isArray(parsed) ? parsed.find((p: any) => p['@type'] === 'Product') : parsed;
+          }
+        }
+      } catch (e) {}
+    });
+
+    if (ldData) {
+      if (!title) title = ldData.name;
+      if (!price && ldData.offers && ldData.offers.price) {
+        price = `${ldData.offers.price} ${ldData.offers.priceCurrency === 'RUB' ? '₽' : ldData.offers.priceCurrency}`;
+      }
+    }
+
+    // Description text
+    const description = $('[data-marker="item-view/item-description"]').text().trim() || $('.item-description p').map((i, el) => $(el).text()).get().join('\n').trim();
+    
+    // Date
+    const date = $('[data-marker="item-view/item-date"]').text().trim();
+
+    // Images
+    const images: string[] = [];
+    
+    // 1. Check item-view/gallery
+    $('[data-marker="item-view/gallery"] img').each((i, el) => {
+       const src = $(el).attr('src') || $(el).attr('data-src');
+       if (src && src.startsWith('http') && !images.includes(src) && !src.includes('avatar')) {
+         images.push(src);
+       }
+    });
+
+    // 2. Check JSON data for high res images (often in window.__initialData__)
+    const scripts = $('script').toArray();
+    for (const script of scripts) {
+      const content = $(script).html() || '';
+      if (content.includes('window.__initialData__')) {
+        try {
+           const jsonStr = content.split('window.__initialData__ = "')[1].split('";')[0];
+           const decoded = decodeURIComponent(jsonStr);
+           const data = JSON.parse(decoded);
+           
+           // Search for images in the massive state object
+           const findImages = (obj: any, depth = 0) => {
+              if (depth > 15 || !obj || typeof obj !== 'object') return;
+              if (Array.isArray(obj)) {
+                 for (const item of obj) findImages(item, depth + 1);
+                 return;
+              }
+              
+              // Common Avito image object patterns in state
+              if (obj['636x476'] && typeof obj['636x476'] === 'string' && obj['636x476'].startsWith('http')) {
+                 if (!images.includes(obj['636x476'])) images.push(obj['636x476']);
+              } else if (obj['1280x960'] && typeof obj['1280x960'] === 'string' && obj['1280x960'].startsWith('http')) {
+                 if (!images.includes(obj['1280x960'])) images.push(obj['1280x960']);
+              } else if (obj.type === 'image' && obj.value && typeof obj.value === 'string' && obj.value.startsWith('http')) {
+                 if (!images.includes(obj.value)) images.push(obj.value);
+              }
+              
+              const keys = Object.keys(obj);
+              if (keys.length > 100) return; // Skip massive objects to avoid recursion hell
+              
+              for (const key of keys) {
+                if (['image', 'images', 'gallery', 'photo', 'photos'].includes(key.toLowerCase()) || typeof obj[key] === 'object') {
+                   findImages(obj[key], depth + 1);
+                }
+              }
+           };
+           findImages(data);
+        } catch(e) {}
+      }
+    }
+
+    // 3. Fallback to all images on page if nothing found
+    if (images.length === 0) {
+      $('img').each((i, el) => {
+         const src = $(el).attr('src') || $(el).attr('data-src');
+         if (src && src.startsWith('http') && src.includes('avito.st/image') && !images.includes(src)) {
+           images.push(src);
+         }
+      });
+    }
+
+    return {
+      title,
+      price,
+      description,
+      date,
+      images: images.slice(0, 10).filter(url => !url.includes('blank.gif') && !url.includes('avatar'))
+    };
+  } catch (error: any) {
+    if (error.message === 'BLOCKED') throw error;
+    console.error(`[Скрейпер:Avito] Ошибка при парсинге страницы объявления: ${error.message}`);
+    return {};
+  }
 }
 
 const BASE_URL = 'https://www.avito.ru';
