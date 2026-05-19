@@ -118,7 +118,18 @@ export async function fetchAdDetails(url: string, proxyUrl?: string): Promise<Pa
     });
 
     const html = response.body;
-    if (html.includes('auth-form') || html.includes('Доступ временно заблокирован') || html.includes('firewall')) {
+    const blockPatterns = [
+      'auth-form', 
+      'Доступ временно заблокирован', 
+      'firewall', 
+      'Доступ ограничен', 
+      'проблема с IP', 
+      'доступ к сайту ограничен',
+      'технические работы',
+      'Forbidden'
+    ];
+
+    if (blockPatterns.some(p => html.toLowerCase().includes(p.toLowerCase()))) {
       throw new Error('BLOCKED');
     }
 
@@ -163,31 +174,90 @@ export async function fetchAdDetails(url: string, proxyUrl?: string): Promise<Pa
     // Images
     let images: string[] = [];
     
-    // Strategy: Find all potential Avito image URLs on the page, 
-    // and "upscale" them by replacing typical size suffixes with a medium-quality one (636x476).
+    // Strategy: 
+    // 1. Try to extract images from window.__initialData__ (JSON state). 
+    // This often contains high-res images that aren't yet "active" in the DOM gallery.
+    const scripts = $('script').toArray();
+    for (const script of scripts) {
+      const content = $(script).html() || '';
+      if (content.includes('window.__initialData__')) {
+        try {
+          const jsonStrPart = content.split('window.__initialData__ = "')[1];
+          if (jsonStrPart) {
+            const jsonStr = jsonStrPart.split('";')[0];
+            const decoded = decodeURIComponent(jsonStr);
+            const data = JSON.parse(decoded);
+            
+            // Recursive search for image objects in the massive state
+            const findImagesInState = (obj: any, depth = 0) => {
+              if (depth > 25 || !obj || typeof obj !== 'object') return;
+              
+              if (Array.isArray(obj)) {
+                for (const item of obj) findImagesInState(item, depth + 1);
+                return;
+              }
+              
+              // Avito image object patterns:
+              // 1. Objects with dimensions as keys (636x476 is what we want)
+              const sizes = ['636x476', '1280x960', '800x600'];
+              for (const size of sizes) {
+                if (obj[size] && typeof obj[size] === 'string' && obj[size].startsWith('http')) {
+                  if (!images.includes(obj[size])) images.push(obj[size]);
+                }
+              }
+              
+              // 2. Objects with structure { type: 'image', value: 'url' }
+              if (obj.type === 'image' && obj.value && typeof obj.value === 'string' && obj.value.startsWith('http')) {
+                 if (!images.includes(obj.value)) images.push(obj.value);
+              }
+
+              // 3. Objects with 'images' array of objects
+              if (obj.images && Array.isArray(obj.images)) {
+                for (const img of obj.images) {
+                  if (typeof img === 'string' && img.startsWith('http') && !images.includes(img)) {
+                    images.push(img);
+                  } else if (typeof img === 'object') {
+                    findImagesInState(img, depth + 1);
+                  }
+                }
+              }
+
+              // Continue recursion
+              const keys = Object.keys(obj);
+              if (keys.length > 200) return; // Optimization: skip massive flat objects
+              for (const key of keys) {
+                if (typeof obj[key] === 'object' && obj[key] !== null) {
+                  findImagesInState(obj[key], depth + 1);
+                }
+              }
+            };
+            
+            findImagesInState(data);
+          }
+        } catch (e) {
+          console.error('[Скрейпер:Avito] Ошибка парсинга __initialData__:', e.message);
+        }
+      }
+    }
+
     const upscaleUrl = (url: string) => {
       if (!url || !url.includes('avito.st/image')) return url;
-      // Common Avito size patterns: 140x105, 144x108, 208x156, etc.
-      // We want to replace them with 636x476 which is usually available and good quality.
       return url
-        .replace(/\/\d+x\d+\//, '/636x476/') // Replace size in path if any
-        .replace(/_\d+x\d+/, '_636x476')    // Replace size suffix if any
-        .replace(/image\/1\/1\.(.+?)\.(.+?)$/, (match, id, hash) => {
-           // If the hash seems to indicate a size, some patterns exist, but regular replace above covers most.
-           return match;
-        });
+        .replace(/\/\d+x\d+\//, '/636x476/') 
+        .replace(/_\d+x\d+/, '_636x476');
     };
 
-    // 1. Main gallery data-marker
-    $('[data-marker^="item-view/gallery"] img').each((i, el) => {
-       const src = $(el).attr('src') || $(el).attr('data-src');
-       if (src && src.startsWith('http') && !src.includes('avatar')) {
-         const upscaled = upscaleUrl(src);
-         if (!images.includes(upscaled)) images.push(upscaled);
-       }
-    });
+    // 2. Fallback to scraping the DOM if JSON data was insufficient
+    if (images.length < 3) {
+      $('[data-marker^="item-view/gallery"] img').each((i, el) => {
+         const src = $(el).attr('src') || $(el).attr('data-src');
+         if (src && src.startsWith('http') && !src.includes('avatar')) {
+           const upscaled = upscaleUrl(src);
+           if (!images.includes(upscaled)) images.push(upscaled);
+         }
+      });
+    }
 
-    // 2. If we still need more images, check for low-res thumbnails and upscale them
     if (images.length < 3) {
       $('[data-marker="item-view/gallery-thumbnails"] img, .gallery-img, .image-frame img').each((i, el) => {
          const src = $(el).attr('src') || $(el).attr('data-src');
@@ -198,20 +268,20 @@ export async function fetchAdDetails(url: string, proxyUrl?: string): Promise<Pa
       });
     }
 
-    // 3. Fallback: search for any URL that looks like an Avito image
-    if (images.length < 3) {
-      const htmlString = $.html();
-      const imgRegex = /https?:\/\/[^\s"'<>]+?\.avito\.st\/image\/[^\s"'<>]+/g;
-      let match;
-      while ((match = imgRegex.exec(htmlString)) !== null && images.length < 10) {
-        const upscaled = upscaleUrl(match[0]);
-        if (!images.includes(upscaled)) images.push(upscaled);
-      }
-    }
-
-    // Clean up and filter
+    // Filter to prioritized size if possible, or just keep what we found
     images = images
       .filter(url => !url.includes('blank.gif') && !url.includes('avatar') && !url.includes('pixel'))
+      // Try to favor '636x476' versions if we have duplicates of the same image ID
+      .filter((url, index, self) => {
+         // This is a naive way to de-duplicate different sizes of the same image
+         // Avito URLs usually look like .../image/1/HASH.HASH2
+         const match = url.match(/\/image\/1\/(.+)$/);
+         if (!match) return true;
+         const id = match[1].split('/')[0] || match[1];
+         // If there's another URL with the same id later in the list, and it's a better one, skip this.
+         // Or just keep first one found - usually our logic finds high-res first now.
+         return self.findIndex(u => u.includes(id)) === index;
+      })
       .slice(0, 3);
 
     return {
@@ -319,7 +389,17 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
     }
 
     // Иногда отдает 200, но вместо контента страница блокировки (капча)
-    if (html.includes('auth-form') || html.includes('Доступ временно заблокирован') || html.includes('firewall')) {
+    const blockPatterns = [
+      'auth-form', 
+      'Доступ временно заблокирован', 
+      'firewall', 
+      'Доступ ограничен', 
+      'проблема с IP', 
+      'доступ к сайту ограничен',
+      'Forbidden'
+    ];
+
+    if (blockPatterns.some(p => html.toLowerCase().includes(p.toLowerCase()))) {
       currentProxyStatus = '⚠️ Страница блокировки/капчи (200 OK)';
       throw new Error('BLOCKED');
     }
