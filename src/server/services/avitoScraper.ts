@@ -282,7 +282,7 @@ export async function fetchAdDetails(url: string, proxyUrl?: string): Promise<Pa
          // Or just keep first one found - usually our logic finds high-res first now.
          return self.findIndex(u => u.includes(id)) === index;
       })
-      .slice(0, 3);
+      .slice(0, 1);
 
     return {
       title,

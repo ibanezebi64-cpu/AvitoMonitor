@@ -69,10 +69,10 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
       httpsAgent = new HttpsProxyAgent(proxyString);
     }
     
-    // Download and upload up to 3 images with retries
-    console.log(`[Скрейпер:VK] Начинаю загрузку изображений (${ad.images.length} найдено) для ${ad.avito_id}`);
-    for (const imgUrl of ad.images) {
-      if (attachments.length >= 3) break;
+    // Download and upload only the first image
+    if (ad.images && ad.images.length > 0) {
+      const imgUrl = ad.images[0];
+      console.log(`[Скрейпер:VK] Загружаю главное изображение для ${ad.avito_id}`);
       
       let success = false;
       for (let attempt = 1; attempt <= 3; attempt++) {
@@ -107,9 +107,8 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
               source: { value: response.data, filename: 'image.jpg' }
             });
             attachments.push(photo.toString());
-            console.log(`[Скрейпер:VK] ✅ Изображение загружено с попытки ${attempt} (${attachments.length}/3)`);
+            console.log(`[Скрейпер:VK] ✅ Главное изображение загружено с попытки ${attempt}`);
             success = true;
-            await delay(800);
             break; 
           }
         } catch (e: any) {
@@ -163,8 +162,9 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
         if (remaining.length > 0) await delay(500);
       }
     }
-  } catch (error) {
-    console.error(`Failed to send message to ${vkId}:`, error);
+  } catch (error: any) {
+    console.error(`Failed to send message to ${vkId}:`, error.message);
+    throw error;
   }
 }
 
@@ -323,7 +323,19 @@ export async function runSchedulerLoop() {
                          ad.date = details.date;
 
                          console.log(`[Скрейпер] Отправляем объявление ${ad.avito_id} (${ad.title})`);
-                         await notifyUser(task.user_id, ad, getCurrentProxy());
+                         
+                         let notifySuccess = false;
+                         let notifyAttempts = 0;
+                         while (notifyAttempts < 3 && !notifySuccess) {
+                           try {
+                             await notifyUser(task.user_id, ad, getCurrentProxy());
+                             notifySuccess = true;
+                           } catch (err: any) {
+                             notifyAttempts++;
+                             console.warn(`[Скрейпер] Ошибка отправки в VK (попытка ${notifyAttempts}/3) для ${ad.avito_id}: ${err.message}`);
+                             if (notifyAttempts < 3) await delay(2000 * notifyAttempts);
+                           }
+                         }
                       }
                     }
                  }
