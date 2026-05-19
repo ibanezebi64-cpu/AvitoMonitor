@@ -2,7 +2,7 @@ import { VK, Keyboard } from 'vk-io';
 import axios from 'axios';
 import { getAllActiveUsers } from './services/userService';
 import { getUserCategories, getCategoryFilters, Category } from './services/categoryService';
-import { fetchCategoryAds, ScrapedAd } from './services/avitoScraper';
+import { fetchCategoryAds, ScrapedAd, advanceProxy, getCurrentProxy } from './services/avitoScraper';
 import { db } from './database';
 import dotenv from 'dotenv';
 dotenv.config();
@@ -105,14 +105,36 @@ export async function runSchedulerLoop() {
             let initializationMode = !task.cat.is_initialized;
 
             while (true) {
-              const ads = await fetchCategoryAds(task.cat.category_code, filters?.search_query, filters?.url, page);
-              
-              // If fetch executes successfully without throw, reset block counter
-              if (wasBlocked && consecutiveBlocks > 0) {
-                  notifyAdmin(`✅ Парсер вышел из блока и успешно продолжил работу!`);
+              let ads: ScrapedAd[] = [];
+              try {
+                ads = await fetchCategoryAds(task.cat.category_code, filters?.search_query, filters?.url, page);
+                
+                // If fetch executes successfully without throw, reset block counter
+                if (wasBlocked && consecutiveBlocks > 0) {
+                    notifyAdmin(`✅ Парсер вышел из блока и успешно продолжил работу! (Прокси: ${getCurrentProxy() || 'Локальный'})`);
+                }
+                consecutiveBlocks = 0;
+                wasBlocked = false;
+              } catch (fetchError: any) {
+                if (fetchError.message === 'BLOCKED') {
+                  advanceProxy();
+                  const nextProxy = getCurrentProxy();
+                  notifyAdmin(`⚠️ Столкнулся с капчей/блоком, переключаюсь на другой прокси: ${nextProxy || 'Локальный'} (Категория: ${task.cat.title}, Страница: ${page})`);
+                  consecutiveBlocks++;
+                  if (consecutiveBlocks >= 20) {
+                     // Too many blocks even with proxies, exit for cooldown
+                     blockCaughtInThisCycle = true;
+                     wasBlocked = true;
+                     break; 
+                  }
+                  await delay(getRandomInt(5000, 10000));
+                  continue; // Retry the same page with a new proxy
+                } else {
+                  throw fetchError;
+                }
               }
-              consecutiveBlocks = 0;
-              wasBlocked = false;
+
+              console.log(`Fetched ${ads.length} ads from page ${page} (initializationMode: ${initializationMode})`);
 
               if (ads.length === 0) {
                  break;
@@ -177,12 +199,11 @@ export async function runSchedulerLoop() {
 
             // Random delay between tasks
             await delay(getRandomInt(15000, 30000));
-          } catch (fetchError: any) {
-            if (fetchError.message === 'BLOCKED') {
-              blockCaughtInThisCycle = true;
-              wasBlocked = true;
-              break; // Break the 'for' loop to wait for global scheduler loop
+            if (blockCaughtInThisCycle) {
+               break; // Pass the break to the outer loop to start cooldown
             }
+          } catch (fetchError: any) {
+            console.error(`Error in task ${task.cat.title}:`, fetchError);
           }
         }
       }

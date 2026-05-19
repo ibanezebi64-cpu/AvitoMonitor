@@ -3,6 +3,34 @@ import UserAgent from 'user-agents';
 import dotenv from 'dotenv';
 dotenv.config();
 
+let currentProxyIndex = 0;
+
+export function getProxyList(): string[] {
+  const proxiesStr = process.env.PROXIES || '';
+  if (!proxiesStr) {
+    if (process.env.PROXY_URL) return [process.env.PROXY_URL];
+    return [];
+  }
+  return proxiesStr.split(',').map(p => p.trim()).filter(p => p.length > 0);
+}
+
+export function getCurrentProxy(): string | undefined {
+  const proxies = getProxyList();
+  if (proxies.length === 0) return undefined;
+  
+  if (currentProxyIndex >= proxies.length) {
+    currentProxyIndex = 0;
+  }
+  return proxies[currentProxyIndex];
+}
+
+export function advanceProxy() {
+  const proxies = getProxyList();
+  if (proxies.length > 0) {
+    currentProxyIndex = (currentProxyIndex + 1) % proxies.length;
+  }
+}
+
 export interface ScrapedAd {
   avito_id: string;
   title: string;
@@ -47,9 +75,10 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
 
   try {
     const { gotScraping } = await import('got-scraping');
+    const proxyToUse = getCurrentProxy();
     const response = await gotScraping({
       url,
-      proxyUrl: process.env.PROXY_URL || undefined,
+      proxyUrl: proxyToUse,
       headerGeneratorOptions: {
         browsers: [{ name: 'chrome', minVersion: 110 }],
         devices: ['desktop', 'mobile'],
@@ -107,10 +136,17 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
 
     return ads;
   } catch (error: any) {
-    if (error.response && [403, 429].includes(error.response.statusCode)) {
-      console.error(`Avito Blocked us (${error.response.statusCode}) on ${url}`);
+    if (error.response && [403, 429, 407, 502, 503].includes(error.response.statusCode)) {
+      console.error(`Avito/Proxy Blocked us (${error.response.statusCode}) on ${url}`);
       throw new Error('BLOCKED');
     }
+    
+    // Also treat generic network / proxy connection errors as a reason to switch proxy
+    if (error.code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH', 'ECONNREFUSED'].includes(error.code)) {
+      console.error(`Network error (${error.code}) on ${url}, treating as block.`);
+      throw new Error('BLOCKED');
+    }
+
     console.error(`Error fetching Avito for category ${categoryCode}:`, error.message);
     return [];
   }
