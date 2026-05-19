@@ -322,7 +322,7 @@ export async function runSchedulerLoop() {
                          ad.description = details.description;
                          ad.date = details.date;
 
-                         console.log(`[Скрейпер] Отправляем 8137258015 (${ad.title})`);
+                         console.log(`[Скрейпер] Отправляем объявление ${ad.avito_id} (${ad.title})`);
                          await notifyUser(task.user_id, ad, getCurrentProxy());
                       }
                     }

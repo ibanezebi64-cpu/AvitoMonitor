@@ -473,6 +473,8 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
 
     return ads;
   } catch (error: any) {
+    if (error.message === 'BLOCKED') throw error;
+    
     if (error.response && [403, 429, 407, 502, 503].includes(error.response.statusCode)) {
       currentProxyStatus = getStatusDescription(error.response.statusCode);
       console.error(`Avito/Proxy Blocked us (${error.response.statusCode}) on ${url}`);
@@ -485,7 +487,6 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
       throw new Error('BLOCKED');
     }
 
-    // Also treat generic network / proxy connection errors as a reason to switch proxy
     if (error.code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH', 'ECONNREFUSED'].includes(error.code)) {
       currentProxyStatus = getStatusDescription(undefined, error.code);
       console.error(`Network error (${error.code}) on ${url}, treating as block.`);
@@ -493,7 +494,12 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
     }
 
     currentProxyStatus = getStatusDescription(undefined, error.message);
-    console.error(`Error fetching Avito for category ${categoryCode}:`, error.message);
+    console.error(`Error fetching Avito for category ${categoryCode}: ${error.message}`);
+    // If it's something unidentified but looks like a block (e.g. timeout or weird response), 
+    // it's better to throw BLOCKED than return [].
+    if (error.message && (error.message.includes('timeout') || error.message.includes('hang up'))) {
+       throw new Error('BLOCKED');
+    }
     return [];
   }
 }
