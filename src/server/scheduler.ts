@@ -122,7 +122,7 @@ export async function runSchedulerLoop() {
             let initializationMode = !task.cat.is_initialized;
             const cookieJar = new CookieJar();
             const sessionToken = {}; 
-            let referer = 'https://m.avito.ru/';
+            let referer = 'https://www.avito.ru/';
 
             while (true) {
               console.log(`[Скрейпер] -> Читаю страницу ${page} для категории: ${task.cat.title}... (initializationMode: ${initializationMode})`);
@@ -132,7 +132,7 @@ export async function runSchedulerLoop() {
                 // Update referer to current page URL for next request
                 referer = typeof filters?.url === 'string' && filters.url 
                           ? filters.url + (page > 1 ? `&p=${page}` : '') 
-                          : `https://m.avito.ru/rossiya/${task.cat.category_code}?p=${page}`;
+                          : `https://www.avito.ru/rossiya/${task.cat.category_code}?p=${page}`;
                 
                 // If fetch executes successfully without throw, reset block counter
                 if (wasBlocked && consecutiveBlocks > 0) {

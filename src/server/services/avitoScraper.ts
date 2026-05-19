@@ -58,12 +58,12 @@ export async function testAllProxies(): Promise<string> {
         proxyUrl: proxy,
         headerGeneratorOptions: {
           browsers: [{ name: 'chrome', minVersion: 110 }, { name: 'safari', minVersion: 15 }],
-          devices: ['mobile'],
+          devices: ['desktop'],
           locales: ['ru-RU', 'ru;q=0.9'],
-          operatingSystems: ['android', 'ios']
+          operatingSystems: ['windows', 'macos']
         },
         headers: {
-          'referer': 'https://m.avito.ru/'
+          'referer': 'https://www.avito.ru/'
         },
         timeout: { request: 40000 },
         throwHttpErrors: false
@@ -90,7 +90,7 @@ export interface ScrapedAd {
   images: string[];
 }
 
-const BASE_URL = 'https://m.avito.ru';
+const BASE_URL = 'https://www.avito.ru';
 
 function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -107,7 +107,7 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
   let url = `${BASE_URL}/rossiya/${categoryCode}`;
   
   if (customUrl) {
-    url = customUrl.replace('www.avito.ru', 'm.avito.ru').replace('://avito.ru', '://m.avito.ru');
+    url = customUrl.replace('m.avito.ru', 'www.avito.ru').replace('://avito.ru', '://www.avito.ru');
   } else if (searchQuery) {
     url = `${BASE_URL}/rossiya?q=${encodeURIComponent(searchQuery)}`;
   }
@@ -134,22 +134,33 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
       sessionToken,
       headerGeneratorOptions: {
         browsers: [{ name: 'chrome', minVersion: 110 }, { name: 'safari', minVersion: 15 }],
-        devices: ['mobile'],
+        devices: ['desktop'],
         locales: ['ru-RU', 'ru;q=0.9'],
-        operatingSystems: ['android', 'ios']
+        operatingSystems: ['windows', 'macos']
       },
       headers: {
-        'referer': referer || 'https://m.avito.ru/'
+        'referer': referer || 'https://www.avito.ru/'
       },
       timeout: { request: 40000 }
     });
 
-    const html = response.body;
+    let html: any = response.body;
     
     // Если Авито вместо объявлений отдает страницу логина (перенаправляет)
     if (response.url && (response.url.includes('/login') || response.url.includes('auth'))) {
       currentProxyStatus = '🛑 Редирект на страницу авторизации';
       throw new Error('BLOCKED');
+    }
+
+    // Обработка серверного редиректа в JSON (Suspense Redirect), часто бывает на десктопе
+    if (html.includes('"redirect":') && html.includes('"isSuspenseRedirect":true')) {
+       const match = html.match(/"redirect":"(.*?)"/);
+       if (match && match[1]) {
+          const redirectPath = match[1].replace(/\\u0026/g, '&');
+          const redirectUrl = redirectPath.startsWith('http') ? redirectPath : `${BASE_URL}${redirectPath}`;
+          console.log(`[Скрейпер:Avito] Обнаружен серверный редирект: ${redirectUrl}. Перехожу...`);
+          return fetchCategoryAds(categoryCode, searchQuery, redirectUrl, page, cookieJar, sessionToken, url);
+       }
     }
 
     // Иногда отдает 200, но вместо контента страница блокировки (капча)
@@ -159,19 +170,22 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
     }
 
     currentProxyStatus = '✅ Отлично (200)';
-    const $ = cheerio.load(html);
+    let $ = cheerio.load(html);
 
     const ads: ScrapedAd[] = [];
 
     // NOTE: Selectors are extremely volatile on Avito. 
     // This is a generalized approximation for demonstration.
     $('[data-marker="item"]').each((i, el) => {
-      const avito_id = $(el).attr('data-item-id');
+      const avito_id = $(el).attr('data-item-id') || $(el).find('a[data-marker-id]').attr('data-marker-id');
       const titleElem = $(el).find('[data-marker="item-title"]');
-      const title = titleElem.text().trim();
+      let title = titleElem.text().trim();
+      if (!title) {
+          title = $(el).find('h3').text().trim();
+      }
       
       // Attempt to get relative url
-      let itemUrl = $(el).find('a[itemprop="url"]').attr('href') || titleElem.attr('href') || '';
+      let itemUrl = $(el).find('a[itemprop="url"]').attr('href') || titleElem.attr('href') || $(el).find('a[data-marker="item-title"]').attr('href') || '';
       if (itemUrl && !itemUrl.startsWith('http')) {
         itemUrl = BASE_URL + itemUrl;
       }
@@ -204,8 +218,9 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
       }
     });
 
+    const titleText = $('title').text().trim();
     if (ads.length === 0) {
-      console.log(`[Скрейпер:Avito] Внимание: Найдено 0 объявлений. Проверка структуры HTML: title=${$('title').text().trim()}`);
+      console.log(`[Скрейпер:Avito] Внимание: Найдено 0 объявлений. Проверка структуры HTML: title=${titleText}`);
       // Check if it's an end-of-catalog or empty message
       if (html.includes('По вашему запросу ничего не найдено') || html.includes('ничего не найдено')) {
          console.log(`[Скрейпер:Avito] Обнаружен конец выдачи (объявления закончились на этой странице).`);
@@ -213,6 +228,11 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
          console.log(`[Скрейпер:Avito] Подозрительно маленький размер страницы (${html.length} байт). Возможно лимит выдачи без JS.`);
       }
     }
+
+    // Help garbage collector
+    html = '';
+    (response as any).body = null;
+    $ = null as any;
 
     return ads;
   } catch (error: any) {
