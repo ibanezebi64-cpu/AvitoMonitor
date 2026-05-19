@@ -21,14 +21,14 @@ function getRandomInt(min: number, max: number) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-export async function fetchCategoryAds(categoryCode: string, searchQuery?: string | null, customUrl?: string | null): Promise<ScrapedAd[]> {
+export async function fetchCategoryAds(categoryCode: string, searchQuery?: string | null, customUrl?: string | null, page: number = 1): Promise<ScrapedAd[]> {
   // Add a random human-like delay before requesting
-  await delay(getRandomInt(2000, 7000));
+  await delay(getRandomInt(3000, 7000));
 
   let url = `${BASE_URL}/rossiya/${categoryCode}`;
   
   if (customUrl) {
-    url = customUrl;
+    url = customUrl.replace('www.avito.ru', 'm.avito.ru').replace('://avito.ru', '://m.avito.ru');
   } else if (searchQuery) {
     url = `${BASE_URL}/rossiya?q=${encodeURIComponent(searchQuery)}`;
   }
@@ -37,6 +37,9 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
   try {
     const parsedUrl = new URL(url);
     parsedUrl.searchParams.set('s', '104');
+    if (page > 1) {
+      parsedUrl.searchParams.set('p', page.toString());
+    }
     url = parsedUrl.toString();
   } catch(e) {
     console.error('Failed to parse URL for sorting', e);

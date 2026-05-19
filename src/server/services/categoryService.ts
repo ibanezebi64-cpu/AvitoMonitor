@@ -31,7 +31,7 @@ export function addCategory(vkId: number, categoryCode: string, title: string, c
   const filterStmt = db.prepare('INSERT INTO filters (category_id, url) VALUES (?, ?)');
   filterStmt.run(info.lastInsertRowid, customUrl || null);
   
-  return { id: info.lastInsertRowid as number, user_id: vkId, category_code: categoryCode, title };
+  return { id: info.lastInsertRowid as number, user_id: vkId, category_code: categoryCode, title, is_initialized: 0 };
 }
 
 export function removeCategory(categoryId: number, vkId: number) {

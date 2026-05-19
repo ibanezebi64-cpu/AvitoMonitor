@@ -98,36 +98,42 @@ export async function runSchedulerLoop() {
           cats.forEach(c => allTasks.push({ user_id: u.vk_id, cat: c }));
         }
 
-        // We should group tasks by category_code to optimize parsing, but for now we'll do sequentially.
         for (const task of allTasks) {
           try {
             const filters = getCategoryFilters(task.cat.id);
-            const ads = await fetchCategoryAds(task.cat.category_code, filters?.search_query, filters?.url);
-            
-            // If fetch executes successfully without throw, reset block counter
-            if (wasBlocked && consecutiveBlocks > 0) {
-                notifyAdmin(`✅ Парсер вышел из блока и успешно продолжил работу!`);
-            }
-            consecutiveBlocks = 0;
-            wasBlocked = false;
+            let page = 1;
+            let initializationMode = !task.cat.is_initialized;
 
-            if (ads.length > 0) {
-              if (!task.cat.is_initialized) {
+            while (true) {
+              const ads = await fetchCategoryAds(task.cat.category_code, filters?.search_query, filters?.url, page);
+              
+              // If fetch executes successfully without throw, reset block counter
+              if (wasBlocked && consecutiveBlocks > 0) {
+                  notifyAdmin(`✅ Парсер вышел из блока и успешно продолжил работу!`);
+              }
+              consecutiveBlocks = 0;
+              wasBlocked = false;
+
+              if (ads.length === 0) {
+                 break;
+              }
+
+              if (initializationMode) {
                  // First run: just save all ads to as seen, so they don't trigger notifications later.
                  for (const ad of ads) {
                    if (!hasSeenAd(task.user_id, ad.avito_id)) {
                      markAdAsSeen(task.user_id, ad.avito_id);
                    }
                  }
-                 db.prepare('UPDATE categories SET is_initialized = 1 WHERE id = ?').run(task.cat.id);
-                 task.cat.is_initialized = 1;
+                 page++;
+                 if (page > 30) break; // Limit initialization to max 30 pages to prevent infinite loops / rate limits
+                 await delay(getRandomInt(3000, 7000));
               } else {
+                 let foundSeenAd = false;
+                 
                  // Filter ads logically
                  const filteredAds = ads.filter(ad => {
-                    // Extricate price number
-                    const parsedPrice = parseInt(ad.price.replace(/\\D/g, ''), 10);
-                    // Only apply these filters if it's NOT a custom URL 
-                    // Custom URLs usually have their own pre-applied filters on Avito side
+                    const parsedPrice = parseInt(ad.price.replace(/\D/g, ''), 10);
                     if (!isNaN(parsedPrice) && filters && !filters.url) {
                       if (filters.min_price && parsedPrice < filters.min_price) return false;
                       if (filters.max_price && parsedPrice > filters.max_price) return false;
@@ -135,16 +141,41 @@ export async function runSchedulerLoop() {
                     return true;
                  });
 
-                 for (const ad of filteredAds) {
-                   if (!hasSeenAd(task.user_id, ad.avito_id)) {
-                     await notifyUser(task.user_id, ad);
+                 for (const ad of ads) {
+                   if (hasSeenAd(task.user_id, ad.avito_id)) {
+                     foundSeenAd = true;
+                   } else {
+                     // Add to DB
                      markAdAsSeen(task.user_id, ad.avito_id);
+                     
+                     // Send to user only if it matches filters
+                     if (filteredAds.some(fAd => fAd.avito_id === ad.avito_id)) {
+                       await notifyUser(task.user_id, ad);
+                     }
                    }
                  }
+
+                 if (foundSeenAd) {
+                   break; // We reached ads that are already in DB
+                 }
+
+                 page++;
+                 if (page > 10) break; // Hard limit for regular updates to avoid huge hits if something goes wrong
+                 await delay(getRandomInt(4000, 7000)); // Delay between pages
               }
+            } // end while(true)
+            
+            if (initializationMode) {
+               db.prepare('UPDATE categories SET is_initialized = 1 WHERE id = ?').run(task.cat.id);
+               task.cat.is_initialized = 1;
+               vk.api.messages.send({
+                 user_id: task.user_id,
+                 random_id: Math.floor(Math.random() * 1000000000),
+                 message: `✅ Категория "${task.cat.title}" к работе готова! Исходная база объявлений собрана.`
+               }).catch(e => console.error(e));
             }
 
-            // Random delay between 15-30 seconds to not spam Avito completely instantly
+            // Random delay between tasks
             await delay(getRandomInt(15000, 30000));
           } catch (fetchError: any) {
             if (fetchError.message === 'BLOCKED') {
