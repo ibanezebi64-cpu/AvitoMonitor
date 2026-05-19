@@ -141,6 +141,11 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
       throw new Error('BLOCKED');
     }
     
+    if (error.message && (error.message.includes('407 Proxy Authentication Required') || error.message.includes('Proxy responded with') || error.message.includes('tunneling socket could not be established'))) {
+      console.error(`Proxy error on ${url}: ${error.message}`);
+      throw new Error('BLOCKED');
+    }
+
     // Also treat generic network / proxy connection errors as a reason to switch proxy
     if (error.code && ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EHOSTUNREACH', 'ECONNREFUSED'].includes(error.code)) {
       console.error(`Network error (${error.code}) on ${url}, treating as block.`);
