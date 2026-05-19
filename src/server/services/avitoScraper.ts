@@ -113,9 +113,12 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
   }
 
   // Force sort by date (s=104) so that we always get newest items instead of old VIP items
+  // BUT only if it's not already set to something else that looks like a sort
   try {
     const parsedUrl = new URL(url);
-    parsedUrl.searchParams.set('s', '104');
+    if (!parsedUrl.searchParams.has('s')) {
+      parsedUrl.searchParams.set('s', '104');
+    }
     if (page > 1) {
       parsedUrl.searchParams.set('p', page.toString());
     }
@@ -177,6 +180,13 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
     // NOTE: Selectors are extremely volatile on Avito. 
     // This is a generalized approximation for demonstration.
     $('[data-marker="item"]').each((i, el) => {
+      // Check if it's a real item and not some similar/recommended block outside catalog
+      const parentHierarchy = $(el).parents('[data-marker]').map((idx, p) => $(p).attr('data-marker')).get();
+      const inCatalog = parentHierarchy.includes('catalog-serp');
+      
+      // If it's NOT in the main catalog, it might be recommendations which user doesn't want
+      if (!inCatalog) return;
+
       const avito_id = $(el).attr('data-item-id') || $(el).find('a[data-marker-id]').attr('data-marker-id');
       const titleElem = $(el).find('[data-marker="item-title"]');
       let title = titleElem.text().trim();
@@ -192,20 +202,54 @@ export async function fetchCategoryAds(categoryCode: string, searchQuery?: strin
 
       const price = $(el).find('[data-marker="item-price"]').text().trim();
       
-      // Images
+      // Images - on Avito search result, sometimes multiple images are available in a source set or hidden tags
       const images: string[] = [];
-      $(el).find('img').each((idx, imgEl) => {
-        const src = $(imgEl).attr('src');
-        const className = $(imgEl).attr('class') || '';
-        // Skip user avatars and dummy icons
-        if (src && src.startsWith('http') && 
-            !src.includes('avatar') && 
-            !className.includes('avatar') && 
-            !className.includes('seller') && 
-            !className.includes('icon')) {
-          images.push(src);
+
+      // Try searching for more images in data-props or other attributes
+      const dataProps = $(el).attr('data-props');
+      if (dataProps) {
+        try {
+          const props = JSON.parse(dataProps);
+          if (props.images && Array.isArray(props.images)) {
+            props.images.forEach((img: any) => {
+              const url = img.url || img['636x476'] || img['432x324'];
+              if (url && url.startsWith('http') && !images.includes(url)) {
+                images.push(url);
+              }
+            });
+          }
+        } catch (e) {
+          // ignore parse errors
         }
-      });
+      }
+
+      if (images.length < 3) {
+        $(el).find('img').each((idx, imgEl) => {
+          const src = $(imgEl).attr('src');
+          const dataSrc = $(imgEl).attr('data-src');
+          const srcset = $(imgEl).attr('srcset');
+          
+          let foundUrl = src || dataSrc;
+          
+          // If srcset is present, try to get a better quality image
+          if (srcset) {
+             const sets = srcset.split(',').map(s => s.trim().split(' ')[0]);
+             if (sets.length > 0) foundUrl = sets[sets.length - 1]; // highest quality usually
+          }
+
+          const className = $(imgEl).attr('class') || '';
+          // Skip user avatars and dummy icons
+          if (foundUrl && foundUrl.startsWith('http') && 
+              !foundUrl.includes('avatar') && 
+              !className.includes('avatar') && 
+              !className.includes('seller') && 
+              !className.includes('icon')) {
+            if (!images.includes(foundUrl)) {
+               images.push(foundUrl);
+            }
+          }
+        });
+      }
 
       if (avito_id && title && itemUrl) {
          ads.push({

@@ -9,7 +9,10 @@ import dotenv from 'dotenv';
 import { CookieJar } from 'tough-cookie';
 dotenv.config();
 
-const vk = new VK({ token: process.env.VK_TOKEN || 'DUMMY' });
+const vk = new VK({ 
+  token: process.env.VK_TOKEN || 'DUMMY',
+  uploadTimeout: 60000 
+});
 const ADMIN_VK_ID = process.env.ADMIN_VK_ID ? parseInt(process.env.ADMIN_VK_ID, 10) : 0;
 
 function delay(ms: number) {
@@ -61,18 +64,26 @@ async function notifyUser(vkId: number, ad: ScrapedAd, proxyString?: string) {
       try {
         const response = await axios.get(imgUrl, { 
           responseType: 'arraybuffer', 
-          timeout: 15000,
+          timeout: 20000,
           httpsAgent: httpsAgent,
-          proxy: false // Ensure axios doesn't try to use its own proxy logic if httpsAgent is supplied
+          proxy: false,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36'
+          }
         });
-        const photo = await vk.upload.messagePhoto({
-          source: { value: response.data, filename: 'image.jpg' }
-        });
-        attachments.push(photo.toString());
+        
+        if (response.data && response.data.length > 0) {
+           const photo = await vk.upload.messagePhoto({
+             source: { value: response.data, filename: 'image.jpg' }
+           });
+           attachments.push(photo.toString());
+           await delay(1000); // 1s delay between photo uploads
+        }
+        
         // Help garbage collector
         (response as any).data = null;
       } catch (e) {
-        console.error('Error uploading photo to VK:', e);
+        console.error(`Error uploading photo ${imgUrl} to VK:`, e);
       }
     }
 

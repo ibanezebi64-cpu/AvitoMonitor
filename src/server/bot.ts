@@ -12,7 +12,8 @@ if (!vkToken) {
 }
 
 const vk = new VK({
-  token: vkToken || 'DUMMY_TOKEN', // prevents crashing if not set, but won't work
+  token: vkToken || 'DUMMY_TOKEN',
+  uploadTimeout: 60000 // 60 seconds for uploads
 });
 
 const sessionManager = new SessionManager();
