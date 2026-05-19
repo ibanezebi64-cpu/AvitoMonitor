@@ -140,11 +140,11 @@ vk.updates.on('message_new', async (context, next) => {
   }
 
   if (payload?.command === 'add_by_url') {
-    updateUserState(user.vk_id, 'await_avito_url');
+    updateUserState(user.vk_id, 'await_custom_title');
     const kb = Keyboard.builder().textButton({ label: 'Отмена', payload: { command: 'main' }, color: Keyboard.NEGATIVE_COLOR }).inline(true);
 
     await context.send({
-      message: '🔗 Инструкция:\n1. Зайдите на сайт Авито (avito.ru) или в приложение.\n2. Введите нужный поисковой запрос, выберите категорию и любые фильтры.\n3. ОБЯЗАТЕЛЬНО установите сортировку "По дате" (важно для корректной работы!).\n4. Скопируйте ссылку и отправьте её сюда.',
+      message: '📝 Введите название для этого поиска (например: "iPhone 15 Pro" или "Кофемашина"):',
       keyboard: kb
     });
     return;
@@ -245,15 +245,36 @@ vk.updates.on('message_new', async (context, next) => {
   const text = (context.text || '').trim();
   const user = context.state.dbUser;
 
+  if (user.state === 'await_custom_title') {
+    if (text.length < 2 || text.length > 100) {
+      await context.send({ message: '❌ Название должно быть от 2 до 100 символов.' });
+      return;
+    }
+    
+    updateUserState(user.vk_id, `await_avito_url:${text}`);
+    const kb = Keyboard.builder().textButton({ label: 'Отмена', payload: { command: 'main' }, color: Keyboard.NEGATIVE_COLOR }).inline(true);
+
+    await context.send({
+      message: `✅ Название "${text}" принято.\n\n🔗 Теперь отправьте ссылку с Авито:\n1. Зайдите на сайт Авито (avito.ru) или в приложение.\n2. Введите запрос и выберите фильтры.\n3. ОБЯЗАТЕЛЬНО установите сортировку "По дате".\n4. Скопируйте ссылку из адресной строки и вставьте её сюда.`,
+      keyboard: kb
+    });
+    return;
+  }
+
   if (user.state.startsWith('await_avito_url')) {
     if (text.includes('avito.ru/')) {
       const urlRegex = /https?:\/\/\S+/;
       const urlMatch = text.match(urlRegex);
       if (urlMatch) {
-         addCategory(user.vk_id, 'custom_url', 'Пользовательский поиск (Ссылка)', urlMatch[0]);
+         let title = 'Пользовательский поиск';
+         if (user.state.includes(':')) {
+           title = user.state.split(':')[1];
+         }
+         
+         addCategory(user.vk_id, 'custom_url', title, urlMatch[0]);
          updateUserState(user.vk_id, 'main_menu');
          await context.send({
-           message: '✅ Поиск по ссылке успешно добавлен! Бот будет учитывать все выбранные в ней фильтры на Авито.',
+           message: `✅ Поиск "${title}" успешно добавлен! Бот будет отслеживать новые объявления по этой ссылке.`,
            keyboard: getInlineMainMenu(user.is_active, context.senderId)
          });
          return;
